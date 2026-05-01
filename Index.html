@@ -13,19 +13,59 @@
     -webkit-text-size-adjust: 100%;
   }
   h1 {
-    margin: 0 0 12px 0;
-    font-size: 18px;
+    margin: 0 0 8px 0;
+    font-size: 16px;
     color: #333;
   }
+  .section-label {
+    font-size: 11px;
+    color: #666;
+    margin: 4px 0 4px 2px;
+    font-weight: bold;
+  }
+
+  /* 担当者 */
+  .workers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .worker-btn {
+    padding: 8px 12px;
+    font-size: 14px;
+    border: 2px solid #aaa;
+    border-radius: 20px;
+    background: #fff;
+    color: #333;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .worker-btn.active {
+    background: #6a1b9a;
+    color: #fff;
+    border-color: #4a148c;
+  }
+  .worker-add {
+    padding: 8px 14px;
+    font-size: 14px;
+    border: 2px dashed #888;
+    border-radius: 20px;
+    background: #fafafa;
+    color: #555;
+    cursor: pointer;
+  }
+
+  /* モード */
   .modes {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 8px;
-    margin-bottom: 16px;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 6px;
+    margin-bottom: 12px;
   }
   .mode-btn {
-    padding: 16px 4px;
-    font-size: 16px;
+    padding: 14px 2px;
+    font-size: 14px;
     font-weight: bold;
     border: 2px solid #888;
     border-radius: 8px;
@@ -40,25 +80,28 @@
     color: #fff;
     border-color: #1b5e20;
   }
+  .mode-btn[data-mode="採取"].active { background: #ef6c00; border-color: #e65100; }
   .mode-btn[data-mode="受入"].active { background: #1565c0; border-color: #0d47a1; }
   .mode-btn[data-mode="分析"].active { background: #c62828; border-color: #b71c1c; }
+  .mode-btn.auto-hint {
+    border-style: dashed;
+    border-color: #2e7d32;
+  }
 
   .scan-area {
     background: #fff;
     border-radius: 8px;
-    padding: 16px;
+    padding: 14px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
   }
   .mode-status {
-    font-size: 14px;
+    font-size: 13px;
     color: #666;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
   }
-  .mode-status .current {
-    font-size: 20px;
-    font-weight: bold;
-    color: #2e7d32;
-  }
+  .mode-status .current { font-size: 18px; font-weight: bold; color: #2e7d32; }
+  .mode-status .worker  { font-size: 14px; color: #6a1b9a; margin-left: 8px; }
+
   #scanInput {
     width: 100%;
     padding: 14px;
@@ -73,81 +116,81 @@
     border-color: #1b5e20;
     box-shadow: 0 0 0 3px rgba(46, 125, 50, 0.2);
   }
-  .hint {
-    font-size: 12px;
-    color: #999;
-    margin-top: 6px;
-    text-align: center;
-  }
+  .hint { font-size: 11px; color: #999; margin-top: 6px; text-align: center; }
 
   .result {
-    margin-top: 16px;
+    margin-top: 14px;
     padding: 14px;
     border-radius: 8px;
     background: #fff;
     box-shadow: 0 1px 3px rgba(0,0,0,0.1);
     min-height: 60px;
   }
-  .result.ok {
-    border-left: 6px solid #2e7d32;
-  }
-  .result.error {
-    border-left: 6px solid #c62828;
-    background: #ffebee;
-  }
-  .result.idle {
-    border-left: 6px solid #ccc;
-  }
-  .result-msg {
-    font-size: 16px;
-    color: #333;
-  }
-  .result-time {
-    font-size: 14px;
-    color: #666;
-    margin-top: 4px;
-  }
+  .result.ok    { border-left: 6px solid #2e7d32; }
+  .result.error { border-left: 6px solid #c62828; background: #ffebee; }
+  .result.idle  { border-left: 6px solid #ccc; }
+  .result.warn  { border-left: 6px solid #ef6c00; background: #fff3e0; }
+  .result-msg  { font-size: 15px; color: #333; }
+  .result-time { font-size: 13px; color: #666; margin-top: 4px; }
 
-  .history {
-    margin-top: 16px;
-  }
-  .history h3 {
-    font-size: 14px;
-    color: #666;
-    margin: 0 0 6px 0;
-  }
+  .history { margin-top: 14px; }
+  .history h3 { font-size: 13px; color: #666; margin: 0 0 6px 0; }
   .history-item {
-    padding: 8px 12px;
+    padding: 6px 10px;
     background: #fff;
     border-radius: 4px;
-    margin-bottom: 4px;
-    font-size: 13px;
+    margin-bottom: 3px;
+    font-size: 12px;
     display: flex;
     justify-content: space-between;
     align-items: center;
   }
-  .history-item.ok { border-left: 4px solid #2e7d32; }
+  .history-item.ok    { border-left: 4px solid #2e7d32; }
   .history-item.error { border-left: 4px solid #c62828; }
-  .history-time {
-    color: #999;
-    font-size: 11px;
-  }
+  .history-time { color: #999; font-size: 10px; }
 
-  .mode-required {
-    text-align: center;
-    color: #c62828;
-    font-size: 16px;
-    padding: 12px;
-    background: #ffebee;
-    border-radius: 8px;
-    margin-bottom: 12px;
+  /* 確認ダイアログ */
+  .modal-mask {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
   }
+  .modal-mask.show { display: flex; }
+  .modal {
+    background: #fff;
+    border-radius: 10px;
+    padding: 20px;
+    max-width: 360px;
+    width: 90%;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  }
+  .modal h3 { margin: 0 0 10px 0; font-size: 16px; color: #c62828; }
+  .modal p  { font-size: 14px; color: #333; margin: 0 0 16px 0; }
+  .modal-buttons { display: flex; gap: 8px; justify-content: flex-end; }
+  .modal-buttons button {
+    padding: 10px 18px;
+    font-size: 14px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+  }
+  .modal-buttons .ok     { background: #ef6c00; color: #fff; }
+  .modal-buttons .cancel { background: #ccc;    color: #333; }
 </style>
 </head>
 <body>
   <h1>shast LAB 入力</h1>
 
+  <div class="section-label">担当者</div>
+  <div id="workers" class="workers"></div>
+
+  <div class="section-label">工程モード（-1/-2/-3 は自動切替）</div>
   <div class="modes">
+    <button class="mode-btn" data-mode="採取">採取</button>
     <button class="mode-btn" data-mode="受入">受入</button>
     <button class="mode-btn" data-mode="風乾">風乾</button>
     <button class="mode-btn" data-mode="振動">振動</button>
@@ -155,13 +198,10 @@
     <button class="mode-btn" data-mode="分析">分析</button>
   </div>
 
-  <div id="modeRequired" class="mode-required" style="display:none;">
-    👆 まず工程モードを選択してください
-  </div>
-
   <div class="scan-area">
     <div class="mode-status">
-      選択中: <span id="currentMode" class="current">未選択</span>
+      モード: <span id="currentMode" class="current">未選択</span>
+      <span id="currentWorker" class="worker"></span>
     </div>
     <input type="text" id="scanInput" placeholder="ここにスキャン..." autocomplete="off" autofocus>
     <div class="hint">バーコードリーダーで読み取ると自動送信されます</div>
@@ -176,65 +216,164 @@
     <div id="historyList"></div>
   </div>
 
+  <!-- 確認ダイアログ -->
+  <div id="confirmMask" class="modal-mask">
+    <div class="modal">
+      <h3>前工程未完了</h3>
+      <p id="confirmMsg"></p>
+      <div class="modal-buttons">
+        <button class="cancel" id="confirmCancel">キャンセル</button>
+        <button class="ok"     id="confirmOk">記録する</button>
+      </div>
+    </div>
+  </div>
+
 <script>
   let currentMode = null;
+  let currentWorker = '';
   const history = [];
   const HISTORY_MAX = 10;
+  let pendingConfirm = null; // {mode, code}
 
-  // モードボタン
+  const scanInput = document.getElementById('scanInput');
+
+  // ---- 担当者 ----
+  function loadWorkers() {
+    google.script.run
+      .withSuccessHandler(res => {
+        currentWorker = res.current || '';
+        renderWorkers(res.workers || []);
+        updateWorkerLabel();
+      })
+      .withFailureHandler(e => console.error('getWorkerList', e))
+      .getWorkerList();
+  }
+
+  function renderWorkers(list) {
+    const root = document.getElementById('workers');
+    root.innerHTML = '';
+    list.forEach(name => {
+      const btn = document.createElement('button');
+      btn.className = 'worker-btn' + (name === currentWorker ? ' active' : '');
+      btn.textContent = name;
+      btn.addEventListener('click', () => selectWorker(name));
+      root.appendChild(btn);
+    });
+    const add = document.createElement('button');
+    add.className = 'worker-add';
+    add.textContent = '＋ 追加';
+    add.addEventListener('click', addWorkerPrompt);
+    root.appendChild(add);
+  }
+
+  function selectWorker(name) {
+    currentWorker = name;
+    document.querySelectorAll('.worker-btn').forEach(b => {
+      b.classList.toggle('active', b.textContent === name);
+    });
+    updateWorkerLabel();
+    google.script.run
+      .withFailureHandler(e => console.error('setCurrentWorker', e))
+      .setCurrentWorker(name);
+    focusInput();
+  }
+
+  function updateWorkerLabel() {
+    const el = document.getElementById('currentWorker');
+    el.textContent = currentWorker ? '担当: ' + currentWorker : '';
+  }
+
+  function addWorkerPrompt() {
+    const name = prompt('追加する担当者の名前');
+    if (!name) return;
+    google.script.run
+      .withSuccessHandler(res => {
+        if (res.ok) {
+          loadWorkers();
+        } else {
+          alert(res.message || '追加失敗');
+        }
+      })
+      .withFailureHandler(e => alert('通信エラー: ' + e.message))
+      .addWorker(name.trim());
+  }
+
+  // ---- モード ----
   document.querySelectorAll('.mode-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      currentMode = btn.dataset.mode;
-      document.getElementById('currentMode').textContent = currentMode;
-      document.getElementById('modeRequired').style.display = 'none';
+      setMode(btn.dataset.mode);
       focusInput();
     });
   });
 
-  const scanInput = document.getElementById('scanInput');
+  function setMode(mode) {
+    currentMode = mode;
+    document.querySelectorAll('.mode-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.mode === mode);
+      b.classList.remove('auto-hint');
+    });
+    document.getElementById('currentMode').textContent = mode || '未選択';
+  }
+
+  // 入力中の suffix を見て対応モードをハイライト(参考表示)
+  scanInput.addEventListener('input', () => {
+    const v = scanInput.value.trim();
+    const m = v.match(/-(\d+)$/);
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('auto-hint'));
+    if (m) {
+      const map = { '1': '振動', '2': '濾過', '3': '分析' };
+      const auto = map[m[1]];
+      if (auto) {
+        const target = document.querySelector('.mode-btn[data-mode="' + auto + '"]');
+        if (target && !target.classList.contains('active')) target.classList.add('auto-hint');
+      }
+    }
+  });
 
   // フォーカス自動維持
-  function focusInput() {
-    scanInput.focus();
-    scanInput.select();
-  }
+  function focusInput() { scanInput.focus(); scanInput.select(); }
   setInterval(() => {
-    if (document.activeElement !== scanInput && currentMode) focusInput();
+    if (document.activeElement !== scanInput &&
+        !document.getElementById('confirmMask').classList.contains('show')) {
+      focusInput();
+    }
   }, 500);
 
-  // Enter送信(バーコードリーダーは末尾Enterを送る)
+  // Enter送信
   scanInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
       const code = scanInput.value.trim();
       if (!code) return;
-
-      if (!currentMode) {
-        document.getElementById('modeRequired').style.display = 'block';
-        scanInput.value = '';
-        return;
-      }
-
-      submitScan(currentMode, code);
+      submitScan(currentMode || '', code, false);
       scanInput.value = '';
     }
   });
 
-  function submitScan(mode, code) {
+  function submitScan(mode, code, force) {
     setResult('idle', '送信中... ' + code);
     google.script.run
       .withSuccessHandler(onScanResult)
       .withFailureHandler(onScanError)
-      .handleScan(mode, code);
+      .handleScan(mode, code, !!force);
   }
 
   function onScanResult(res) {
     if (res.ok) {
+      // 自動切替があった場合はモードボタンも追従
+      if (res.autoMode) setMode(res.autoMode);
+      else if (res.mode) setMode(res.mode);
       setResult('ok', res.message, res.time);
       addHistory('ok', res.message);
       beep(true);
+    } else if (res.needConfirm) {
+      // 順番警告 → ダイアログ
+      pendingConfirm = { mode: res.mode, code: res.code };
+      if (res.autoMode) setMode(res.autoMode);
+      document.getElementById('confirmMsg').textContent = res.message;
+      document.getElementById('confirmMask').classList.add('show');
+      setResult('warn', res.message);
+      beep(false);
     } else {
       setResult('error', res.message);
       addHistory('error', res.message);
@@ -250,6 +389,22 @@
     focusInput();
   }
 
+  // ---- 確認ダイアログ ----
+  document.getElementById('confirmOk').addEventListener('click', () => {
+    document.getElementById('confirmMask').classList.remove('show');
+    if (pendingConfirm) {
+      submitScan(pendingConfirm.mode, pendingConfirm.code, true);
+      pendingConfirm = null;
+    }
+  });
+  document.getElementById('confirmCancel').addEventListener('click', () => {
+    document.getElementById('confirmMask').classList.remove('show');
+    pendingConfirm = null;
+    setResult('idle', 'キャンセルしました');
+    focusInput();
+  });
+
+  // ---- 表示 ----
   function setResult(state, msg, time) {
     const el = document.getElementById('result');
     el.className = 'result ' + state;
@@ -260,7 +415,8 @@
 
   function addHistory(state, msg) {
     const time = new Date().toLocaleTimeString('ja-JP', { hour12: false });
-    history.unshift({ state, msg, time });
+    const prefix = currentWorker ? '[' + currentWorker + '] ' : '';
+    history.unshift({ state, msg: prefix + msg, time });
     if (history.length > HISTORY_MAX) history.pop();
     renderHistory();
   }
@@ -279,14 +435,13 @@
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
-  // 簡易ビープ音
+  // 簡易ビープ
   function beep(success) {
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.connect(gain);
-      gain.connect(ctx.destination);
+      osc.connect(gain); gain.connect(ctx.destination);
       osc.frequency.value = success ? 880 : 220;
       gain.gain.value = 0.1;
       osc.start();
@@ -294,7 +449,8 @@
     } catch (e) {}
   }
 
-  // 初期フォーカス
+  // 初期化
+  loadWorkers();
   setTimeout(focusInput, 100);
 </script>
 </body>
