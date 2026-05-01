@@ -188,13 +188,13 @@
   <div class="section-label">担当者</div>
   <div id="workers" class="workers"></div>
 
-  <div class="section-label">工程モード（-1/-2/-3 は自動切替）</div>
+  <div class="section-label">工程モード（-huri / -roka は自動切替）</div>
   <div class="modes">
     <button class="mode-btn" data-mode="採取">採取</button>
     <button class="mode-btn" data-mode="受入">受入</button>
     <button class="mode-btn" data-mode="風乾">風乾</button>
-    <button class="mode-btn" data-mode="振動">振動</button>
-    <button class="mode-btn" data-mode="濾過">濾過</button>
+    <button class="mode-btn" data-mode="振り">振り</button>
+    <button class="mode-btn" data-mode="ろか">ろか</button>
     <button class="mode-btn" data-mode="分析">分析</button>
   </div>
 
@@ -317,16 +317,14 @@
 
   // 入力中の suffix を見て対応モードをハイライト(参考表示)
   scanInput.addEventListener('input', () => {
-    const v = scanInput.value.trim();
-    const m = v.match(/-(\d+)$/);
+    const v = scanInput.value.trim().toLowerCase();
     document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('auto-hint'));
-    if (m) {
-      const map = { '1': '振動', '2': '濾過', '3': '分析' };
-      const auto = map[m[1]];
-      if (auto) {
-        const target = document.querySelector('.mode-btn[data-mode="' + auto + '"]');
-        if (target && !target.classList.contains('active')) target.classList.add('auto-hint');
-      }
+    let auto = null;
+    if (v.endsWith('-huri')) auto = '振り';
+    else if (v.endsWith('-roka')) auto = currentMode === '分析' ? '分析' : 'ろか';
+    if (auto) {
+      const target = document.querySelector('.mode-btn[data-mode="' + auto + '"]');
+      if (target && !target.classList.contains('active')) target.classList.add('auto-hint');
     }
   });
 
