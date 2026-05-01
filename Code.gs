@@ -492,6 +492,68 @@ function handlePhase2or3(mode, cfg, parsed, worker, force, autoSwitched) {
   };
 }
 
+// ========== マイグレーション (v2→v3、初回のみ実行) ==========
+/**
+ * 工程時刻シートを v2 旧レイアウト(D採取 E受入 F風乾 G振動 H濾過 I分析)から
+ * v3 新レイアウト(D採取 E採取担当 F受入 G受入担当 H風乾 I風乾担当)に変換。
+ *
+ * 実行方法: Apps Scriptエディタで関数 migrateKoteiToV3 を選択して▶実行
+ *           初回のみ承認ダイアログが出る
+ */
+function migrateKoteiToV3() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_KOTEI);
+  if (!sheet) {
+    SpreadsheetApp.getUi().alert('工程時刻シートが見つかりません');
+    return;
+  }
+  const lastRow = sheet.getLastRow();
+
+  // 旧データを退避 (D=採取, E=旧受入, F=旧風乾, G/H/I=破棄)
+  let oldData = [];
+  if (lastRow >= 2) {
+    oldData = sheet.getRange(2, 4, lastRow - 1, 6).getValues(); // D:I
+  }
+
+  // ヘッダー書き換え
+  sheet.getRange(1, 1, 1, 9).setValues([[
+    '地点', '上下', 'コード',
+    '採取', '採取担当',
+    '受入', '受入担当',
+    '風乾', '風乾担当'
+  ]]);
+
+  // 旧 E/F/G/H/I 列をクリア
+  if (lastRow >= 2) {
+    sheet.getRange(2, 5, lastRow - 1, 5).clearContent(); // E:I
+  }
+
+  // 新レイアウトに書き戻し
+  if (oldData.length > 0) {
+    const newData = oldData.map(row => {
+      const saishu     = row[0]; // 旧D
+      const ukeireOld  = row[1]; // 旧E
+      const fukanOld   = row[2]; // 旧F
+      // 旧G/H/I は破棄
+      return [saishu, '', ukeireOld, '', fukanOld, ''];
+    });
+    sheet.getRange(2, 4, newData.length, 6).setValues(newData);
+
+    // 日時列の表示形式
+    sheet.getRange(2, 4, newData.length, 1).setNumberFormat('yyyy/MM/dd HH:mm'); // D
+    sheet.getRange(2, 6, newData.length, 1).setNumberFormat('yyyy/MM/dd HH:mm'); // F
+    sheet.getRange(2, 8, newData.length, 1).setNumberFormat('yyyy/MM/dd HH:mm'); // H
+  }
+
+  SpreadsheetApp.getUi().alert(
+    'マイグレーション完了\n' +
+    '工程時刻シートを v3 レイアウトに変換しました。\n' +
+    '・受入時刻: E列 → F列\n' +
+    '・風乾時刻: F列 → H列\n' +
+    '・旧 振動/濾過/分析 列は削除（前処理/分析シートに移管済み）'
+  );
+}
+
 // ========== ユーティリティ ==========
 function udDisplay(ud) {
   const s = String(ud).toLowerCase().trim();
