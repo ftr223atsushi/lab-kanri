@@ -581,8 +581,8 @@ function getDailyReportData() {
     if (lastRow < 2) {
       return { ok: false, message: '本日の日報シートはまだ空です' };
     }
-    const values = sheet.getRange(1, 1, lastRow, DAILY_REPORT_HEADER.length).getValues();
-    // 1行目はヘッダー
+    // getDisplayValues = 表示形式そのまま (時刻 "10:23" 等が文字列で返る)
+    const values = sheet.getRange(1, 1, lastRow, DAILY_REPORT_HEADER.length).getDisplayValues();
     const header = values[0].map(v => String(v == null ? '' : v));
     const rows = values.slice(1).map(r => r.map(v => String(v == null ? '' : v)));
     return { ok: true, name: today, header: header, rows: rows };

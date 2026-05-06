@@ -52,6 +52,52 @@
   }
   .print-btn:hover { background: #1565c0; }
   .print-btn:disabled { background: #90a4ae; border-color: #607d8b; cursor: wait; }
+
+  /* バッチ(まとめて)モード */
+  .batch-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+    padding: 8px 10px;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  }
+  .batch-toggle {
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: bold;
+    border: 2px solid #888;
+    border-radius: 8px;
+    background: #fff;
+    color: #333;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .batch-toggle.active {
+    background: #ffb300;
+    color: #fff;
+    border-color: #ff8f00;
+  }
+  .queue-count {
+    flex: 1;
+    font-size: 14px;
+    color: #555;
+  }
+  .queue-count strong { color: #ff6f00; font-size: 18px; }
+  .send-btn {
+    padding: 10px 18px;
+    font-size: 14px;
+    font-weight: bold;
+    border: 2px solid #1b5e20;
+    border-radius: 8px;
+    background: #2e7d32;
+    color: #fff;
+    cursor: pointer;
+  }
+  .send-btn:disabled { background: #bdbdbd; border-color: #9e9e9e; cursor: not-allowed; }
+  .batch-area.idle { opacity: 0.55; }
   .worker-btn {
     padding: 8px 12px;
     font-size: 14px;
@@ -222,6 +268,12 @@
     <button class="mode-btn" data-mode="分析">分析</button>
   </div>
 
+  <div id="batchRow" class="batch-row batch-area idle">
+    <button id="batchToggle" class="batch-toggle">📦 まとめてモード</button>
+    <div class="queue-count">送信待ち: <strong id="queueCount">0</strong> 件 <span id="idleNote" style="font-size:11px;color:#888;"></span></div>
+    <button id="sendBtn" class="send-btn" disabled>送信</button>
+  </div>
+
   <div class="scan-area">
     <div class="mode-status">
       モード: <span id="currentMode" class="current">未選択</span>
@@ -361,13 +413,17 @@
     }
   }, 500);
 
-  // Enter送信
+  // Enter送信 (またはまとめてモードならキュー追加)
   scanInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
       const code = scanInput.value.trim();
       if (!code) return;
-      submitScan(currentMode || '', code, false);
+      if (batchMode) {
+        addToQueue(currentMode || '', code);
+      } else {
+        submitScan(currentMode || '', code, false);
+      }
       scanInput.value = '';
     }
   });
@@ -457,18 +513,255 @@
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
-  // 簡易ビープ
-  function beep(success) {
-    try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  // ---- ビープ音(WebAudio) ----
+  let _audioCtx = null;
+  function getAudioCtx() {
+    if (!_audioCtx) {
+      try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+      catch (e) { return null; }
+    }
+    if (_audioCtx.state === 'suspended') _audioCtx.resume();
+    return _audioCtx;
+  }
+
+  // 成功: ピコーン! (C5→G5の上昇2連符)
+  function beepSuccess() {
+    const ctx = getAudioCtx(); if (!ctx) return;
+    const t0 = ctx.currentTime;
+    [{f:523.25, t:0}, {f:783.99, t:0.08}].forEach(n => {
       const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain); gain.connect(ctx.destination);
-      osc.frequency.value = success ? 880 : 220;
-      gain.gain.value = 0.1;
-      osc.start();
-      osc.stop(ctx.currentTime + (success ? 0.1 : 0.3));
-    } catch (e) {}
+      const g = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = n.f;
+      g.gain.setValueAtTime(0, t0 + n.t);
+      g.gain.linearRampToValueAtTime(0.25, t0 + n.t + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + n.t + 0.18);
+      osc.connect(g); g.connect(ctx.destination);
+      osc.start(t0 + n.t);
+      osc.stop(t0 + n.t + 0.2);
+    });
+  }
+
+  // 失敗: ブッブー! (低音矩形波 0.22秒×2)
+  function beepError() {
+    const ctx = getAudioCtx(); if (!ctx) return;
+    const t0 = ctx.currentTime;
+    [0, 0.28].forEach(offset => {
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = 180;
+      g.gain.setValueAtTime(0, t0 + offset);
+      g.gain.linearRampToValueAtTime(0.18, t0 + offset + 0.01);
+      g.gain.linearRampToValueAtTime(0, t0 + offset + 0.22);
+      osc.connect(g); g.connect(ctx.destination);
+      osc.start(t0 + offset);
+      osc.stop(t0 + offset + 0.23);
+    });
+  }
+
+  // 警告: ピンポン (E5→A4)
+  function beepWarn() {
+    const ctx = getAudioCtx(); if (!ctx) return;
+    const t0 = ctx.currentTime;
+    [{f:659.25, t:0}, {f:440.00, t:0.16}].forEach(n => {
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = n.f;
+      g.gain.setValueAtTime(0, t0 + n.t);
+      g.gain.linearRampToValueAtTime(0.2, t0 + n.t + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + n.t + 0.25);
+      osc.connect(g); g.connect(ctx.destination);
+      osc.start(t0 + n.t);
+      osc.stop(t0 + n.t + 0.27);
+    });
+  }
+
+  // キュー追加: ティッ (短い高音)
+  function beepQueue() {
+    const ctx = getAudioCtx(); if (!ctx) return;
+    const t0 = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = 1320;
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(0.18, t0 + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.07);
+    osc.connect(g); g.connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + 0.08);
+  }
+
+  // 旧API互換
+  function beep(ok) { ok ? beepSuccess() : beepError(); }
+
+  // ---- まとめてモード(バッチ) ----
+  let batchMode = false;
+  let scanQueue = []; // [{mode, code, addedAt}]
+  let idleTimer = null;
+  let isProcessingQueue = false;
+  const IDLE_MS = 10000;
+
+  const batchToggleBtn = document.getElementById('batchToggle');
+  const sendBtn = document.getElementById('sendBtn');
+  const queueCountEl = document.getElementById('queueCount');
+  const idleNoteEl = document.getElementById('idleNote');
+  const batchRow = document.getElementById('batchRow');
+
+  batchToggleBtn.addEventListener('click', () => {
+    batchMode = !batchMode;
+    batchToggleBtn.classList.toggle('active', batchMode);
+    batchToggleBtn.textContent = batchMode ? '📦 まとめてモード ON' : '📦 まとめてモード';
+    batchRow.classList.toggle('idle', !batchMode);
+    if (!batchMode) {
+      // OFFにしたタイミングで未送信があれば自動送信
+      if (scanQueue.length > 0) sendQueue();
+      clearIdleTimer();
+    }
+    updateBatchUI();
+    focusInput();
+  });
+
+  sendBtn.addEventListener('click', () => sendQueue());
+
+  function addToQueue(mode, code) {
+    // Q4: 重複(同モード+同コード)弾く
+    const dup = scanQueue.some(q => q.code === code && q.mode === mode);
+    if (dup) {
+      setResult('warn', '重複: ' + code + ' は既にキューにあります');
+      beepWarn();
+      return;
+    }
+    scanQueue.push({ mode: mode, code: code, addedAt: Date.now() });
+    setResult('ok', '➕ キュー追加: ' + code + ' (' + (mode || '?') + ') / 待ち ' + scanQueue.length + ' 件');
+    beepQueue();
+    updateBatchUI();
+    resetIdleTimer();
+  }
+
+  function updateBatchUI() {
+    queueCountEl.textContent = scanQueue.length;
+    sendBtn.disabled = !batchMode || scanQueue.length === 0 || isProcessingQueue;
+    if (isProcessingQueue) sendBtn.textContent = '送信中…';
+    else sendBtn.textContent = '送信' + (scanQueue.length > 0 ? ' (' + scanQueue.length + ')' : '');
+  }
+
+  function clearIdleTimer() {
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+    idleNoteEl.textContent = '';
+  }
+
+  function resetIdleTimer() {
+    clearIdleTimer();
+    if (!batchMode || scanQueue.length === 0) return;
+    let remaining = IDLE_MS / 1000;
+    idleNoteEl.textContent = '(' + remaining + '秒後に自動送信)';
+    const tick = setInterval(() => {
+      remaining--;
+      if (remaining <= 0) {
+        clearInterval(tick);
+        idleNoteEl.textContent = '';
+      } else {
+        idleNoteEl.textContent = '(' + remaining + '秒後に自動送信)';
+      }
+    }, 1000);
+    idleTimer = setTimeout(() => {
+      clearInterval(tick);
+      idleNoteEl.textContent = '';
+      if (batchMode && scanQueue.length > 0) sendQueue();
+    }, IDLE_MS);
+  }
+
+  // バッチ送信本体 (順次処理)
+  async function sendQueue() {
+    if (isProcessingQueue || scanQueue.length === 0) return;
+    isProcessingQueue = true;
+    clearIdleTimer();
+    updateBatchUI();
+
+    const total = scanQueue.length;
+    let sent = 0;
+    const errors = [];
+    let idx = 0;
+
+    while (scanQueue.length > 0) {
+      idx++;
+      const item = scanQueue[0];
+      setResult('idle', '送信中 ' + idx + '/' + total + ': ' + item.code);
+      let res = await runScanPromise(item.mode, item.code, false);
+
+      if (res.needConfirm) {
+        // Q3=A: 1件ずつ止まって確認
+        const yes = await showBatchConfirm(res.message);
+        if (yes) {
+          res = await runScanPromise(item.mode, item.code, true);
+        } else {
+          errors.push({ item, msg: 'キャンセルされました' });
+          addHistory('error', '✗ ' + item.code + ' キャンセル');
+          scanQueue.shift();
+          updateBatchUI();
+          continue;
+        }
+      }
+
+      if (res.ok) {
+        sent++;
+        addHistory('ok', res.message);
+      } else {
+        // Q2: エラーはスキップして残り送信
+        errors.push({ item, msg: res.message });
+        addHistory('error', '✗ ' + item.code + ': ' + res.message);
+      }
+      scanQueue.shift();
+      updateBatchUI();
+    }
+
+    isProcessingQueue = false;
+    updateBatchUI();
+
+    // サマリ表示
+    if (errors.length === 0) {
+      setResult('ok', '✓ 一括送信完了: ' + sent + '件すべて成功');
+      beepSuccess();
+    } else {
+      const errList = errors.map(e => '・' + e.item.code + ' (' + e.item.mode + '): ' + e.msg).join('\n');
+      setResult('warn', '一括送信完了: 成功 ' + sent + ' / 失敗 ' + errors.length + '\n失敗:\n' + errList);
+      beepError();
+    }
+    focusInput();
+  }
+
+  function runScanPromise(mode, code, force) {
+    return new Promise(resolve => {
+      google.script.run
+        .withSuccessHandler(resolve)
+        .withFailureHandler(e => resolve({ ok: false, message: '通信エラー: ' + e.message }))
+        .handleScan(mode, code, !!force);
+    });
+  }
+
+  // バッチ用 Promise 版 確認ダイアログ
+  function showBatchConfirm(msg) {
+    return new Promise(resolve => {
+      const mask = document.getElementById('confirmMask');
+      const okBtn = document.getElementById('confirmOk');
+      const caBtn = document.getElementById('confirmCancel');
+      document.getElementById('confirmMsg').textContent = msg;
+      mask.classList.add('show');
+      const onOk = () => { cleanup(); resolve(true); };
+      const onCa = () => { cleanup(); resolve(false); };
+      function cleanup() {
+        mask.classList.remove('show');
+        okBtn.removeEventListener('click', onOk);
+        caBtn.removeEventListener('click', onCa);
+        // 単発モード用 pendingConfirm をクリア
+        pendingConfirm = null;
+      }
+      okBtn.addEventListener('click', onOk);
+      caBtn.addEventListener('click', onCa);
+    });
   }
 
   // ---- 本日分 印刷 ----
@@ -523,7 +816,7 @@
     const html =
       '<!DOCTYPE html>' +
       '<html><head><meta charset="UTF-8">' +
-      '<title>shast LAB 日報 ' + escapeHtml(data.name) + '</title>' +
+      '<title>' + escapeHtml(data.name) + ' 作業日報</title>' +
       '<style>' +
         '@page { size: A4; margin: 12mm; }' +
         'body { font-family: "Hiragino Sans","Yu Gothic","Meiryo",sans-serif; color:#000; margin:0; padding:16px; }' +
@@ -538,8 +831,8 @@
         '.noprint button { padding: 10px 20px; font-size: 14px; cursor: pointer; }' +
       '</style>' +
       '</head><body>' +
-        '<h1>shast LAB 日報</h1>' +
-        '<div class="sub">' + escapeHtml(data.name) + ' / 件数: ' + data.rows.length + '</div>' +
+        '<h1>' + escapeHtml(data.name) + ' 作業日報</h1>' +
+        '<div class="sub">件数: ' + data.rows.length + '</div>' +
         '<table><thead><tr>' + headerCells + '</tr></thead><tbody>' + bodyRows + '</tbody></table>' +
         '<div class="noprint">' +
           '<button onclick="window.print()">🖨 印刷</button> ' +
