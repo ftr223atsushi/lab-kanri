@@ -24,13 +24,34 @@
     font-weight: bold;
   }
 
-  /* 担当者 */
+  /* 担当者行 (担当者ボタン + 本日分ボタン) */
+  .workers-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
   .workers {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    margin-bottom: 10px;
+    flex: 1;
   }
+  .print-btn {
+    padding: 12px 22px;
+    font-size: 16px;
+    font-weight: bold;
+    border: 2px solid #0d47a1;
+    border-radius: 8px;
+    background: #1976d2;
+    color: #fff;
+    cursor: pointer;
+    white-space: nowrap;
+    -webkit-tap-highlight-color: transparent;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+  }
+  .print-btn:hover { background: #1565c0; }
+  .print-btn:disabled { background: #90a4ae; border-color: #607d8b; cursor: wait; }
   .worker-btn {
     padding: 8px 12px;
     font-size: 14px;
@@ -186,7 +207,10 @@
   <h1>shast LAB 入力</h1>
 
   <div class="section-label">担当者</div>
-  <div id="workers" class="workers"></div>
+  <div class="workers-row">
+    <div id="workers" class="workers"></div>
+    <button id="printDailyBtn" class="print-btn" title="本日の日報シートを印刷">🖨 本日分</button>
+  </div>
 
   <div class="section-label">工程モード（-huri / -roka は自動切替）</div>
   <div class="modes">
@@ -445,6 +469,67 @@
       osc.start();
       osc.stop(ctx.currentTime + (success ? 0.1 : 0.3));
     } catch (e) {}
+  }
+
+  // ---- 本日分 印刷 ----
+  document.getElementById('printDailyBtn').addEventListener('click', printDailyReport);
+
+  function printDailyReport() {
+    const btn = document.getElementById('printDailyBtn');
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = '取得中...';
+    google.script.run
+      .withSuccessHandler(res => {
+        btn.disabled = false;
+        btn.textContent = original;
+        if (!res.ok) {
+          alert(res.message || '日報取得に失敗しました');
+          focusInput();
+          return;
+        }
+        try {
+          // base64 → Blob
+          const binary = atob(res.base64);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          const blob = new Blob([bytes], { type: 'application/pdf' });
+          const url = URL.createObjectURL(blob);
+
+          // 既存印刷iframeを毎回作り直し
+          const old = document.getElementById('printFrame');
+          if (old) old.remove();
+          const iframe = document.createElement('iframe');
+          iframe.id = 'printFrame';
+          iframe.style.position = 'fixed';
+          iframe.style.right = '0';
+          iframe.style.bottom = '0';
+          iframe.style.width = '0';
+          iframe.style.height = '0';
+          iframe.style.border = '0';
+          iframe.src = url;
+          iframe.onload = () => {
+            try {
+              iframe.contentWindow.focus();
+              iframe.contentWindow.print();
+            } catch (e) {
+              // iframe印刷不可のフォールバック: 新タブでPDFを開く
+              window.open(url, '_blank');
+            }
+          };
+          document.body.appendChild(iframe);
+        } catch (e) {
+          alert('印刷準備失敗: ' + e.message);
+        }
+        focusInput();
+      })
+      .withFailureHandler(e => {
+        btn.disabled = false;
+        btn.textContent = original;
+        alert('通信エラー: ' + e.message);
+        focusInput();
+      })
+      .getDailyReportPdfBase64();
   }
 
   // 初期化

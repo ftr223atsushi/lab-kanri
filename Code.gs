@@ -1,11 +1,14 @@
 /**
- * shast LAB - GAS Web App (v3)
+ * shast LAB - GAS Web App (v4)
  *
  * 役割:
  *  - フェーズ1: 採取/受入/風乾 (上下別管理) → 工程時刻シート
  *  - フェーズ1終了 (上+下 両方の風乾完了) → 前処理シート/分析シート の M列に混合地点名を自動追加
- *  - フェーズ2前半: 振り/ろか → 前処理シート
- *  - フェーズ2後半: 分析 (早川のみ権限) → 分析シート
+ *  - フェーズ2: 振り/ろか/分析 → すべて 前処理シート に集約
+ *      振り = D/E、ろか = F/G、分析 = H/I
+ *  - 分析権限: 早川 OR 山口
+ *  - 日報シート: 受入/風乾/振り/ろか の4工程を当日付シート(yyyy-MM-dd)にリアルタイム追記
+ *  - 「本日分」ボタン → 当日日報シートをPDFで取得 → iframe に流して即印刷ダイアログ
  *
  * バーコード形式:
  *  - ベースコード   "0001"            → 採取/受入/風乾モード (順番厳格)
@@ -14,8 +17,9 @@
  *
  * シート構造:
  *  工程時刻: A=地点 B=上下 C=コード D=採取 E=採取担当 F=受入 G=受入担当 H=風乾 I=風乾担当
- *  前処理:   A=ID B=地点名 C=色 D=振り時刻 E=振り担当 F=ろか時刻 G=ろか担当 ... M=地点名マスタ
- *  分析:     A=ID B=地点名 C=色 D=分析時刻 E=分析担当 ... M=地点名マスタ
+ *  前処理:   A=ID B=地点名 C=色 D=振り時刻 E=振り担当 F=ろか時刻 G=ろか担当 H=分析時刻 I=分析担当 ... M=地点名マスタ
+ *  分析:     残置(本スクリプトは書込まない)
+ *  yyyy-MM-dd (日報): A=地点 B=上下/RBK C=工程 D=時刻 E=担当者
  *
  *  ※ 前処理シートの M→B 展開、QR生成などは別エンジニア管轄(本スクリプトでは触らない)
  */
@@ -39,14 +43,16 @@ const COL_KOTEI = {
 };
 
 const COL_ZENSHORI = {
-  ID:     1,  // A
-  POINT:  2,  // B
-  COLOR:  3,  // C
-  HURI_T: 4,  // D 振り時刻
-  HURI_W: 5,  // E 振り担当
-  ROKA_T: 6,  // F ろか時刻
-  ROKA_W: 7,  // G ろか担当
-  M:     13   // M 地点名マスタ
+  ID:        1,  // A
+  POINT:     2,  // B
+  COLOR:     3,  // C
+  HURI_T:    4,  // D 振り時刻
+  HURI_W:    5,  // E 振り担当
+  ROKA_T:    6,  // F ろか時刻
+  ROKA_W:    7,  // G ろか担当
+  BUNSEKI_T: 8,  // H 分析時刻
+  BUNSEKI_W: 9,  // I 分析担当
+  M:        13   // M 地点名マスタ
 };
 
 const COL_BUNSEKI = {
@@ -80,18 +86,18 @@ const MODES = {
   '振り': {
     phase: 2, sheet: SHEET_ZENSHORI, expectedSuffix: 'huri',
     col: 'HURI_T', workerCol: 'HURI_W',
-    prevCol: null, strict: false
+    prevCol: null, prevLabel: null, strict: false
   },
   'ろか': {
     phase: 2, sheet: SHEET_ZENSHORI, expectedSuffix: 'roka',
     col: 'ROKA_T', workerCol: 'ROKA_W',
-    prevCol: 'HURI_T', strict: false
+    prevCol: 'HURI_T', prevLabel: '振り', strict: false
   },
   '分析': {
-    phase: 3, sheet: SHEET_BUNSEKI, expectedSuffix: 'roka',
-    col: 'TIME', workerCol: 'WORKER',
-    prevCol: null, strict: false,
-    requireWorker: '早川'
+    phase: 2, sheet: SHEET_ZENSHORI, expectedSuffix: 'roka',
+    col: 'BUNSEKI_T', workerCol: 'BUNSEKI_W',
+    prevCol: 'ROKA_T', prevLabel: 'ろか', strict: false,
+    requireWorkers: ['早川', '山口']
   }
 };
 
@@ -99,7 +105,7 @@ const MODES = {
 const SUFFIX_TO_MODE = { 'huri': '振り', 'roka': 'ろか' };
 
 // 担当者管理
-const DEFAULT_WORKERS = ['川村', '山田', '川添', '石徹白', '早川', '田中'];
+const DEFAULT_WORKERS = ['川村', '山田', '川添', '石徹白', '早川', '田中', '山口'];
 const PROP_WORKERS         = 'lab_workers';
 const PROP_CURRENT_WORKER  = 'lab_current_worker';
 
@@ -207,9 +213,9 @@ function handleScan(mode, code, force) {
     const cfg = MODES[effectiveMode];
     if (!cfg) return { ok: false, message: 'モードが不正です: ' + effectiveMode };
 
-    // 分析モード権限チェック
-    if (cfg.requireWorker && worker !== cfg.requireWorker) {
-      return { ok: false, message: '分析モードは ' + cfg.requireWorker + ' さんのみ使用できます (現在: ' + worker + ')' };
+    // 分析モード権限チェック (複数許可)
+    if (cfg.requireWorkers && cfg.requireWorkers.indexOf(worker) < 0) {
+      return { ok: false, message: '分析モードは ' + cfg.requireWorkers.join('・') + ' のみ使用できます (現在: ' + worker + ')' };
     }
 
     // フェーズ別処理
@@ -304,6 +310,11 @@ function handlePhase1(mode, cfg, baseCode, worker, force, autoSwitched) {
   targetCell.setValue(now);
   targetCell.setNumberFormat('yyyy/MM/dd HH:mm');
   sheet.getRange(foundRow, workerCol).setValue(worker);
+
+  // 日報シートに追記 (受入/風乾のみ)
+  try {
+    logToDailyReport(ss, mode, point, udDisplay(ud), worker, now);
+  } catch (e) {}
 
   // 風乾完了 → 上下揃いチェック → M列追加
   let mergeNote = '';
@@ -435,45 +446,17 @@ function handlePhase2or3(mode, cfg, parsed, worker, force, autoSwitched) {
     };
   }
 
-  // 順番チェック (ろかは振り完了が前提)
+  // 順番チェック
   if (cfg.prevCol) {
     const prevVal = sheet.getRange(foundRow, colDef[cfg.prevCol]).getValue();
     if (!prevVal && !force) {
+      const prevLabel = cfg.prevLabel || '前工程';
       return {
         ok: false, needConfirm: true,
-        message: '振り が完了していませんが ' + mode + ' を記録しますか？',
+        message: prevLabel + ' が完了していませんが ' + mode + ' を記録しますか？',
         mode: mode, code: parsed.point + '-' + parsed.color + '-' + parsed.suffix,
         autoMode: autoSwitched ? mode : null
       };
-    }
-  }
-
-  // 分析の場合: 前処理のろかが完了しているかチェック
-  if (mode === '分析' && !force) {
-    const zen = ss.getSheetByName(SHEET_ZENSHORI);
-    if (zen) {
-      const zlast = zen.getLastRow();
-      if (zlast >= 2) {
-        const zdata = zen.getRange(2, 1, zlast - 1, COL_ZENSHORI.ROKA_T).getValues();
-        let rokaDone = false, rokaFound = false;
-        for (const row of zdata) {
-          const p = String(row[COL_ZENSHORI.POINT - 1]).trim();
-          const c = String(row[COL_ZENSHORI.COLOR - 1]).trim().toUpperCase();
-          if (p === point && c === color.toUpperCase()) {
-            rokaFound = true;
-            if (row[COL_ZENSHORI.ROKA_T - 1]) rokaDone = true;
-            break;
-          }
-        }
-        if (!rokaDone) {
-          return {
-            ok: false, needConfirm: true,
-            message: (rokaFound ? 'ろか' : '前処理') + 'が完了していませんが分析を記録しますか？',
-            mode: mode, code: parsed.point + '-' + parsed.color + '-' + parsed.suffix,
-            autoMode: autoSwitched ? mode : null
-          };
-        }
-      }
     }
   }
 
@@ -482,6 +465,11 @@ function handlePhase2or3(mode, cfg, parsed, worker, force, autoSwitched) {
   targetCell.setValue(now);
   targetCell.setNumberFormat('yyyy/MM/dd HH:mm');
   sheet.getRange(foundRow, workerCol).setValue(worker);
+
+  // 日報シートに追記 (振り/ろかのみ。分析は除外)
+  try {
+    logToDailyReport(ss, mode, point, color.toUpperCase(), worker, now);
+  } catch (e) {}
 
   return {
     ok: true,
@@ -552,6 +540,61 @@ function migrateKoteiToV3() {
     '・風乾時刻: F列 → H列\n' +
     '・旧 振動/濾過/分析 列は削除（前処理/分析シートに移管済み）'
   );
+}
+
+// ========== 日報シート (LABO1: 受入/風乾/振り/ろか) ==========
+const DAILY_REPORT_MODES = ['受入', '風乾', '振り', 'ろか'];
+const DAILY_REPORT_HEADER = ['地点', '上下/RBK', '工程', '時刻', '担当者'];
+
+/**
+ * 当日の日報シートに1行追記。シートが無ければ作成しヘッダーも書き込む。
+ */
+function logToDailyReport(ss, mode, point, udOrColor, worker, time) {
+  if (DAILY_REPORT_MODES.indexOf(mode) < 0) return;
+  const sheetName = Utilities.formatDate(time || new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+    sheet.getRange(1, 1, 1, DAILY_REPORT_HEADER.length).setValues([DAILY_REPORT_HEADER]);
+    sheet.setFrozenRows(1);
+    sheet.getRange(1, 1, 1, DAILY_REPORT_HEADER.length).setFontWeight('bold');
+    sheet.setColumnWidths(1, 5, 100);
+  }
+  const timeStr = Utilities.formatDate(time || new Date(), 'Asia/Tokyo', 'HH:mm');
+  sheet.appendRow([point, udOrColor, mode, timeStr, worker]);
+}
+
+/**
+ * 当日の日報シートを PDF (base64) として取得。
+ * クライアント側で iframe に埋め込み print() を呼ぶ。
+ */
+function getDailyReportPdfBase64() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
+    const sheet = ss.getSheetByName(today);
+    if (!sheet) {
+      return { ok: false, message: '本日の日報シート ' + today + ' が見つかりません(まだ記録なし)' };
+    }
+    const url = 'https://docs.google.com/spreadsheets/d/' + ss.getId() +
+      '/export?format=pdf' +
+      '&gid=' + sheet.getSheetId() +
+      '&portrait=true&size=A4&fitw=true&gridlines=true' +
+      '&printtitle=false&sheetnames=false&pagenumbers=true' +
+      '&top_margin=0.5&bottom_margin=0.5&left_margin=0.5&right_margin=0.5';
+    const token = ScriptApp.getOAuthToken();
+    const resp = UrlFetchApp.fetch(url, {
+      headers: { 'Authorization': 'Bearer ' + token },
+      muteHttpExceptions: true
+    });
+    if (resp.getResponseCode() !== 200) {
+      return { ok: false, message: 'PDF取得失敗 (' + resp.getResponseCode() + ')' };
+    }
+    const base64 = Utilities.base64Encode(resp.getBlob().getBytes());
+    return { ok: true, base64: base64, name: today };
+  } catch (e) {
+    return { ok: false, message: 'エラー: ' + e.message };
+  }
 }
 
 // ========== ユーティリティ ==========
