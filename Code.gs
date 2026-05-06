@@ -104,11 +104,51 @@ const PROP_WORKERS         = 'lab_workers';
 const PROP_CURRENT_WORKER  = 'lab_current_worker';
 
 // ========== Web App エントリ ==========
-function doGet() {
+function doGet(e) {
+  // ?api=ping のような診断用クエリ対応
+  if (e && e.parameter && e.parameter.api === 'ping') {
+    return ContentService.createTextOutput(JSON.stringify({ ok: true, time: new Date().toISOString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
   return HtmlService.createHtmlOutputFromFile('Index')
     .setTitle('shast LAB 入力')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1.0')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+/**
+ * GitHub Pages 等の外部ページからの API エンドポイント
+ * 受信形式: { action: 'handleScan'|'getWorkerList'|..., ...args }
+ * Content-Type は text/plain; charset=utf-8 推奨 (CORS preflight回避)
+ */
+function doPost(e) {
+  try {
+    const raw = (e && e.postData && e.postData.contents) || '{}';
+    const params = JSON.parse(raw);
+    const action = params.action;
+    let result;
+    switch (action) {
+      case 'getWorkerList':
+        result = getWorkerList();
+        break;
+      case 'addWorker':
+        result = addWorker(params.name);
+        break;
+      case 'setCurrentWorker':
+        result = setCurrentWorker(params.name);
+        break;
+      case 'handleScan':
+        result = handleScan(params.mode, params.code, params.force);
+        break;
+      default:
+        result = { ok: false, message: 'unknown action: ' + action };
+    }
+    return ContentService.createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, message: 'API error: ' + err.message }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
 }
 
 // ========== 担当者管理 ==========
