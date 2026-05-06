@@ -479,53 +479,44 @@
     btn.disabled = true;
     const original = btn.textContent;
     btn.textContent = '取得中...';
+
+    // ポップアップブロック対策: ボタン押下と同時に空タブを先に開いておく
+    const w = window.open('', '_blank');
+    if (!w) {
+      btn.disabled = false;
+      btn.textContent = original;
+      alert('ポップアップがブロックされました。ブラウザのポップアップを許可してください。');
+      return;
+    }
+    w.document.write('<title>本日分 日報 取得中…</title><div style="font-family:sans-serif;padding:30px;font-size:16px;">日報PDFを取得しています…</div>');
+
     google.script.run
       .withSuccessHandler(res => {
         btn.disabled = false;
         btn.textContent = original;
         if (!res.ok) {
-          alert(res.message || '日報取得に失敗しました');
+          w.document.body.innerHTML = '<div style="font-family:sans-serif;padding:30px;color:#c62828;">' +
+            '取得失敗: ' + (res.message || '不明なエラー') + '</div>';
           focusInput();
           return;
         }
         try {
-          // base64 → Blob
           const binary = atob(res.base64);
           const bytes = new Uint8Array(binary.length);
           for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
           const blob = new Blob([bytes], { type: 'application/pdf' });
           const url = URL.createObjectURL(blob);
-
-          // 既存印刷iframeを毎回作り直し
-          const old = document.getElementById('printFrame');
-          if (old) old.remove();
-          const iframe = document.createElement('iframe');
-          iframe.id = 'printFrame';
-          iframe.style.position = 'fixed';
-          iframe.style.right = '0';
-          iframe.style.bottom = '0';
-          iframe.style.width = '0';
-          iframe.style.height = '0';
-          iframe.style.border = '0';
-          iframe.src = url;
-          iframe.onload = () => {
-            try {
-              iframe.contentWindow.focus();
-              iframe.contentWindow.print();
-            } catch (e) {
-              // iframe印刷不可のフォールバック: 新タブでPDFを開く
-              window.open(url, '_blank');
-            }
-          };
-          document.body.appendChild(iframe);
+          // 新タブを PDF blob URL に遷移 → ブラウザのPDFビューアが開く
+          w.location.href = url;
         } catch (e) {
-          alert('印刷準備失敗: ' + e.message);
+          w.document.body.innerHTML = '<div style="font-family:sans-serif;padding:30px;color:#c62828;">印刷準備失敗: ' + e.message + '</div>';
         }
         focusInput();
       })
       .withFailureHandler(e => {
         btn.disabled = false;
         btn.textContent = original;
+        try { w.close(); } catch(_) {}
         alert('通信エラー: ' + e.message);
         focusInput();
       })
