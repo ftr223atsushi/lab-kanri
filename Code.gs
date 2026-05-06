@@ -565,12 +565,11 @@ function logToDailyReport(ss, mode, point, udOrColor, worker, time) {
 }
 
 /**
- * 当日の日報シートのPDFエクスポートURLを返す。
- * クライアント側で window.open(url) する。
- * ブラウザがユーザーのGoogle認証でPDFを直接取得するため
- * UrlFetchApp の external_request 権限が不要。
+ * 当日の日報シートのデータを返す。
+ * クライアント側で HTML テーブルとして新タブに描画 → window.print()。
+ * PDFファイルは一切作らないので、ダウンロード保存も発生しない。
  */
-function getDailyReportPdfUrl() {
+function getDailyReportData() {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
@@ -578,13 +577,15 @@ function getDailyReportPdfUrl() {
     if (!sheet) {
       return { ok: false, message: '本日の日報シート ' + today + ' が見つかりません(まだ記録なし)' };
     }
-    const url = 'https://docs.google.com/spreadsheets/d/' + ss.getId() +
-      '/export?format=pdf' +
-      '&gid=' + sheet.getSheetId() +
-      '&portrait=true&size=A4&fitw=true&gridlines=true' +
-      '&printtitle=false&sheetnames=false&pagenumbers=true' +
-      '&top_margin=0.5&bottom_margin=0.5&left_margin=0.5&right_margin=0.5';
-    return { ok: true, url: url, name: today };
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) {
+      return { ok: false, message: '本日の日報シートはまだ空です' };
+    }
+    const values = sheet.getRange(1, 1, lastRow, DAILY_REPORT_HEADER.length).getValues();
+    // 1行目はヘッダー
+    const header = values[0].map(v => String(v == null ? '' : v));
+    const rows = values.slice(1).map(r => r.map(v => String(v == null ? '' : v)));
+    return { ok: true, name: today, header: header, rows: rows };
   } catch (e) {
     return { ok: false, message: 'エラー: ' + e.message };
   }

@@ -488,7 +488,8 @@
       alert('ポップアップがブロックされました。ブラウザのポップアップを許可してください。');
       return;
     }
-    w.document.write('<title>本日分 日報 取得中…</title><div style="font-family:sans-serif;padding:30px;font-size:16px;">日報PDFを取得しています…</div>');
+    w.document.write('<title>本日分 日報 取得中…</title>' +
+      '<div style="font-family:sans-serif;padding:30px;font-size:16px;">日報を取得しています…</div>');
 
     google.script.run
       .withSuccessHandler(res => {
@@ -496,12 +497,11 @@
         btn.textContent = original;
         if (!res.ok) {
           w.document.body.innerHTML = '<div style="font-family:sans-serif;padding:30px;color:#c62828;">' +
-            '取得失敗: ' + (res.message || '不明なエラー') + '</div>';
+            '取得失敗: ' + escapeHtml(res.message || '不明なエラー') + '</div>';
           focusInput();
           return;
         }
-        // PDFエクスポートURLに直接遷移 → ブラウザがGoogle認証でPDFを取得
-        w.location.href = res.url;
+        renderPrintTab(w, res);
         focusInput();
       })
       .withFailureHandler(e => {
@@ -511,7 +511,57 @@
         alert('通信エラー: ' + e.message);
         focusInput();
       })
-      .getDailyReportPdfUrl();
+      .getDailyReportData();
+  }
+
+  function renderPrintTab(w, data) {
+    const headerCells = data.header.map(h => '<th>' + escapeHtml(h) + '</th>').join('');
+    const bodyRows = data.rows.map(row =>
+      '<tr>' + row.map(c => '<td>' + escapeHtml(c) + '</td>').join('') + '</tr>'
+    ).join('');
+
+    const html =
+      '<!DOCTYPE html>' +
+      '<html><head><meta charset="UTF-8">' +
+      '<title>shast LAB 日報 ' + escapeHtml(data.name) + '</title>' +
+      '<style>' +
+        '@page { size: A4; margin: 12mm; }' +
+        'body { font-family: "Hiragino Sans","Yu Gothic","Meiryo",sans-serif; color:#000; margin:0; padding:16px; }' +
+        'h1 { font-size: 18px; margin: 0 0 4px 0; }' +
+        '.sub { font-size: 12px; color:#555; margin-bottom: 12px; }' +
+        'table { width: 100%; border-collapse: collapse; font-size: 13px; }' +
+        'th, td { border: 1px solid #333; padding: 6px 8px; text-align: left; vertical-align: middle; }' +
+        'th { background: #eee; font-weight: bold; }' +
+        'tr:nth-child(even) td { background: #fafafa; }' +
+        '@media print { tr:nth-child(even) td { background: #fff; } .noprint { display:none; } }' +
+        '.noprint { margin-top: 16px; }' +
+        '.noprint button { padding: 10px 20px; font-size: 14px; cursor: pointer; }' +
+      '</style>' +
+      '</head><body>' +
+        '<h1>shast LAB 日報</h1>' +
+        '<div class="sub">' + escapeHtml(data.name) + ' / 件数: ' + data.rows.length + '</div>' +
+        '<table><thead><tr>' + headerCells + '</tr></thead><tbody>' + bodyRows + '</tbody></table>' +
+        '<div class="noprint">' +
+          '<button onclick="window.print()">🖨 印刷</button> ' +
+          '<button onclick="window.close()">閉じる</button>' +
+        '</div>' +
+      '</body></html>';
+
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+
+    // 自動で印刷ダイアログ起動
+    w.onload = () => {
+      try {
+        w.focus();
+        w.print();
+      } catch (e) { /* ボタンで手動印刷可能 */ }
+    };
+    // onload が既に発火済みのケースに備えて遅延フォールバック
+    setTimeout(() => {
+      try { w.focus(); w.print(); } catch (e) {}
+    }, 300);
   }
 
   // 初期化
