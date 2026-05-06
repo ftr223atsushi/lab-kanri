@@ -565,10 +565,12 @@ function logToDailyReport(ss, mode, point, udOrColor, worker, time) {
 }
 
 /**
- * 当日の日報シートを PDF (base64) として取得。
- * クライアント側で iframe に埋め込み print() を呼ぶ。
+ * 当日の日報シートのPDFエクスポートURLを返す。
+ * クライアント側で window.open(url) する。
+ * ブラウザがユーザーのGoogle認証でPDFを直接取得するため
+ * UrlFetchApp の external_request 権限が不要。
  */
-function getDailyReportPdfBase64() {
+function getDailyReportPdfUrl() {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
@@ -582,16 +584,7 @@ function getDailyReportPdfBase64() {
       '&portrait=true&size=A4&fitw=true&gridlines=true' +
       '&printtitle=false&sheetnames=false&pagenumbers=true' +
       '&top_margin=0.5&bottom_margin=0.5&left_margin=0.5&right_margin=0.5';
-    const token = ScriptApp.getOAuthToken();
-    const resp = UrlFetchApp.fetch(url, {
-      headers: { 'Authorization': 'Bearer ' + token },
-      muteHttpExceptions: true
-    });
-    if (resp.getResponseCode() !== 200) {
-      return { ok: false, message: 'PDF取得失敗 (' + resp.getResponseCode() + ')' };
-    }
-    const base64 = Utilities.base64Encode(resp.getBlob().getBytes());
-    return { ok: true, base64: base64, name: today };
+    return { ok: true, url: url, name: today };
   } catch (e) {
     return { ok: false, message: 'エラー: ' + e.message };
   }

@@ -500,17 +500,8 @@
           focusInput();
           return;
         }
-        try {
-          const binary = atob(res.base64);
-          const bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-          const blob = new Blob([bytes], { type: 'application/pdf' });
-          const url = URL.createObjectURL(blob);
-          // 新タブを PDF blob URL に遷移 → ブラウザのPDFビューアが開く
-          w.location.href = url;
-        } catch (e) {
-          w.document.body.innerHTML = '<div style="font-family:sans-serif;padding:30px;color:#c62828;">印刷準備失敗: ' + e.message + '</div>';
-        }
+        // PDFエクスポートURLに直接遷移 → ブラウザがGoogle認証でPDFを取得
+        w.location.href = res.url;
         focusInput();
       })
       .withFailureHandler(e => {
@@ -520,7 +511,7 @@
         alert('通信エラー: ' + e.message);
         focusInput();
       })
-      .getDailyReportPdfBase64();
+      .getDailyReportPdfUrl();
   }
 
   // 初期化
