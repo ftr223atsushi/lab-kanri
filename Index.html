@@ -311,6 +311,13 @@
   const HISTORY_MAX = 10;
   let pendingConfirm = null; // {mode, code}
 
+  // バッチ関連の状態(先頭で初期化しておく)
+  let batchMode = false;
+  let scanQueue = [];
+  let idleTimer = null;
+  let isProcessingQueue = false;
+  const IDLE_MS = 10000;
+
   const scanInput = document.getElementById('scanInput');
 
   // ---- 担当者 ----
@@ -419,14 +426,22 @@
       e.preventDefault();
       const code = scanInput.value.trim();
       if (!code) return;
-      if (batchMode) {
-        addToQueue(currentMode || '', code);
-      } else {
-        submitScan(currentMode || '', code, false);
+      try {
+        if (batchMode) {
+          addToQueue(currentMode || '', code);
+        } else {
+          submitScan(currentMode || '', code, false);
+        }
+      } catch (err) {
+        console.error('scan handler error:', err);
+        setResult('error', '内部エラー: ' + err.message);
       }
       scanInput.value = '';
     }
   });
+
+  // スキャンエリアをタップで明示的にフォーカス(タブレットのキーボード表示用)
+  document.querySelector('.scan-area').addEventListener('click', focusInput);
 
   function submitScan(mode, code, force) {
     setResult('idle', '送信中... ' + code);
@@ -598,12 +613,6 @@
   function beep(ok) { ok ? beepSuccess() : beepError(); }
 
   // ---- まとめてモード(バッチ) ----
-  let batchMode = false;
-  let scanQueue = []; // [{mode, code, addedAt}]
-  let idleTimer = null;
-  let isProcessingQueue = false;
-  const IDLE_MS = 10000;
-
   const batchToggleBtn = document.getElementById('batchToggle');
   const sendBtn = document.getElementById('sendBtn');
   const queueCountEl = document.getElementById('queueCount');
