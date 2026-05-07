@@ -53,7 +53,7 @@ const CARD_COLS            = 6;    // 横6カード
 const CARD_ROWS_PER_BLOCK  = 4;    // QR(1) + 色(1) + ラベル(1) + 空白(1)
 const CARD_COL_WIDTH       = 120;  // 列幅: QR80 + 左右余白(切り取り用隙間)
 const ROW_QR_HEIGHT        = 85;
-const ROW_COLOR_HEIGHT     = 15;
+const ROW_COLOR_HEIGHT     = 26;
 const ROW_LABEL_HEIGHT     = 20;
 const ROW_GAP_HEIGHT       = 8;
 const HEADER_ROW_HEIGHT    = 24;
@@ -533,6 +533,7 @@ function writeBarcodeBlock(bs, top, point, colorSet) {
 
   const qrFormulas = [];
   const colorBgs   = [];
+  const colorTexts = [];
   const labels     = [];
 
   for (const card of BARCODE_CARD_LAYOUT) {
@@ -545,10 +546,13 @@ function writeBarcodeBlock(bs, top, point, colorSet) {
         BARCODE_QR_SIZE + ', ' + BARCODE_QR_SIZE + ')'
       );
       colorBgs.push(BARCODE_COLOR_HEX[card.color]);
+      // 振りカードのみ色マーク行に「ペコタン」を白文字で表示
+      colorTexts.push(card.suffix === 'huri' ? 'ペコタン' : '');
       labels.push(point + ' ' + card.color + ' ' + card.label);
     } else {
       qrFormulas.push('');
       colorBgs.push('#ffffff');
+      colorTexts.push('');
       labels.push('');
     }
   }
@@ -558,10 +562,15 @@ function writeBarcodeBlock(bs, top, point, colorSet) {
   qrRange.setFormulas([qrFormulas]);
   qrRange.setHorizontalAlignment('center').setVerticalAlignment('middle');
 
-  // 色マーク行
+  // 色マーク行 (振りのみ「ペコタン」白文字)
   const colorRange = bs.getRange(colorRow, 1, 1, CARD_COLS);
   colorRange.setBackgrounds([colorBgs]);
-  colorRange.setValues([['', '', '', '', '', '']]);
+  colorRange.setValues([colorTexts]);
+  colorRange.setFontColor('#ffffff');
+  colorRange.setFontWeight('bold');
+  colorRange.setFontSize(13);
+  colorRange.setHorizontalAlignment('center');
+  colorRange.setVerticalAlignment('middle');
 
   // ラベル行
   const labelRange = bs.getRange(labelRow, 1, 1, CARD_COLS);
