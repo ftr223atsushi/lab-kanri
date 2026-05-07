@@ -53,6 +53,22 @@
   .print-btn:hover { background: #1565c0; }
   .print-btn:disabled { background: #90a4ae; border-color: #607d8b; cursor: wait; }
 
+  /* 黄色版印刷ボタン (バーコード印刷用) */
+  .print-btn.yellow {
+    background: #fdd835;
+    border-color: #c5a600;
+    color: #333;
+  }
+  .print-btn.yellow:hover { background: #fbc02d; }
+  .print-btn.yellow:disabled { background: #e6e6e6; border-color: #999; color: #777; }
+
+  /* 印刷ボタン縦積みスタック */
+  .print-btn-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
   /* バッチ(まとめて)モード */
   .batch-row {
     display: flex;
@@ -275,7 +291,10 @@
   <div class="section-label">担当者</div>
   <div class="workers-row">
     <div id="workers" class="workers"></div>
-    <button id="printDailyBtn" class="print-btn" title="本日の日報シートを印刷">🖨 本日分</button>
+    <div class="print-btn-stack">
+      <button id="printBarcodeBtn" class="print-btn yellow" title="バーコード一覧を印刷">▢ コード印刷</button>
+      <button id="printDailyBtn" class="print-btn" title="本日の日報シートを印刷">🖨 本日分</button>
+    </div>
   </div>
 
   <div class="section-label">工程モード（-huri / -roka は自動切替）</div>
@@ -983,6 +1002,163 @@
     setTimeout(() => {
       try { w.focus(); w.print(); } catch (e) {}
     }, 300);
+  }
+
+  // ---- バーコード印刷 ----
+  document.getElementById('printBarcodeBtn').addEventListener('click', printBarcodeSheet);
+
+  function printBarcodeSheet() {
+    const btn = document.getElementById('printBarcodeBtn');
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = '取得中...';
+
+    const w = window.open('', '_blank');
+    if (!w) {
+      btn.disabled = false;
+      btn.textContent = original;
+      alert('ポップアップがブロックされました。ブラウザのポップアップを許可してください。');
+      return;
+    }
+    w.document.write('<title>バーコード一覧 取得中…</title>' +
+      '<div style="font-family:sans-serif;padding:30px;font-size:16px;">バーコードデータを取得しています…</div>');
+
+    google.script.run
+      .withSuccessHandler(res => {
+        btn.disabled = false;
+        btn.textContent = original;
+        if (!res.ok) {
+          w.document.body.innerHTML = '<div style="font-family:sans-serif;padding:30px;color:#c62828;">' +
+            '取得失敗: ' + escapeHtml(res.message || '不明なエラー') + '</div>';
+          focusInput();
+          return;
+        }
+        renderBarcodePrintTab(w, res);
+        focusInput();
+      })
+      .withFailureHandler(e => {
+        btn.disabled = false;
+        btn.textContent = original;
+        try { w.close(); } catch(_) {}
+        alert('通信エラー: ' + e.message);
+        focusInput();
+      })
+      .getBarcodePrintData();
+  }
+
+  function renderBarcodePrintTab(w, data) {
+    // カード並び (シートと同一順): R-ろか / B-ろか / K-ろか / R-振り / B-振り / K-振り
+    const layout = [
+      { color: 'R', suffix: 'roka', label: 'ろか' },
+      { color: 'B', suffix: 'roka', label: 'ろか' },
+      { color: 'K', suffix: 'roka', label: 'ろか' },
+      { color: 'R', suffix: 'huri', label: '振り' },
+      { color: 'B', suffix: 'huri', label: '振り' },
+      { color: 'K', suffix: 'huri', label: '振り' }
+    ];
+    const colorHex = { R: '#e53935', B: '#1e88e5', K: '#000000' };
+    const QR_PX = 80;
+
+    function buildBlock(item) {
+      const point = item.point;
+      const colors = item.colors || [];
+      const cardsHtml = layout.map(card => {
+        if (colors.indexOf(card.color) < 0) {
+          // 歯抜け (空セル)
+          return '<div class="card empty"></div>';
+        }
+        const code = point + '-' + card.color + '-' + card.suffix;
+        const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=' +
+                      QR_PX + 'x' + QR_PX + '&data=' + encodeURIComponent(code);
+        const colorBg = colorHex[card.color];
+        const pekotan = card.suffix === 'huri' ? 'ペコタン' : '';
+        return (
+          '<div class="card">' +
+            '<img class="qr" src="' + qrUrl + '" alt="' + escapeHtml(code) + '">' +
+            '<div class="color-bar" style="background:' + colorBg + ';">' +
+              escapeHtml(pekotan) +
+            '</div>' +
+            '<div class="label">' + escapeHtml(point + ' ' + card.color + ' ' + card.label) + '</div>' +
+          '</div>'
+        );
+      }).join('');
+      return '<div class="block">' + cardsHtml + '</div>';
+    }
+
+    const blocksHtml = data.points.map(buildBlock).join('');
+
+    const html =
+      '<!DOCTYPE html>' +
+      '<html><head><meta charset="UTF-8">' +
+      '<title>shast LAB バーコード一覧</title>' +
+      '<style>' +
+        '@page { size: A4 portrait; margin: 8mm; }' +
+        'body { font-family: "Hiragino Sans","Yu Gothic","Meiryo",sans-serif; color:#000; margin:0; padding:8px; }' +
+        'h1 { font-size: 14px; margin: 0 0 6px 0; text-align:center; }' +
+        '.sub { font-size: 11px; color:#555; text-align:center; margin-bottom: 8px; }' +
+        '.block { ' +
+          'display: grid; ' +
+          'grid-template-columns: repeat(6, 1fr); ' +
+          'gap: 4px; ' +
+          'margin-bottom: 8px; ' +
+          'page-break-inside: avoid; ' +
+          'break-inside: avoid; ' +
+        '}' +
+        '.card { display: flex; flex-direction: column; align-items: stretch; }' +
+        '.card.empty { visibility: hidden; }' +
+        '.qr { width: 100%; height: ' + QR_PX + 'px; object-fit: contain; }' +
+        '.color-bar { ' +
+          'width: 100%; height: 22px; ' +
+          'display: flex; align-items: center; justify-content: center; ' +
+          'color: #fff; font-weight: bold; font-size: 12px; ' +
+          '-webkit-print-color-adjust: exact; print-color-adjust: exact; ' +
+        '}' +
+        '.label { ' +
+          'text-align: center; font-size: 10px; font-weight: bold; ' +
+          'padding: 2px 0 6px 0; ' +
+        '}' +
+        '.noprint { margin-top: 16px; text-align: center; }' +
+        '.noprint button { padding: 10px 20px; font-size: 14px; cursor: pointer; margin: 0 4px; }' +
+        '@media print { .noprint { display: none; } }' +
+      '</style>' +
+      '</head><body>' +
+        '<h1>shast LAB バーコード一覧</h1>' +
+        '<div class="sub">地点数: ' + data.points.length + '</div>' +
+        blocksHtml +
+        '<div class="noprint">' +
+          '<button onclick="window.print()">🖨 印刷</button>' +
+          '<button onclick="window.close()">閉じる</button>' +
+        '</div>' +
+      '</body></html>';
+
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+
+    // QR画像読み込み完了を待ってから印刷ダイアログ起動
+    w.onload = () => {
+      try {
+        w.focus();
+        // QR画像のロード完了待ち (最大2秒)
+        const imgs = w.document.querySelectorAll('img.qr');
+        let loaded = 0;
+        const total = imgs.length;
+        const tryPrint = () => {
+          try { w.focus(); w.print(); } catch (e) {}
+        };
+        if (total === 0) { tryPrint(); return; }
+        imgs.forEach(img => {
+          if (img.complete) { loaded++; }
+          else {
+            img.addEventListener('load',  () => { loaded++; if (loaded >= total) tryPrint(); });
+            img.addEventListener('error', () => { loaded++; if (loaded >= total) tryPrint(); });
+          }
+        });
+        if (loaded >= total) tryPrint();
+        // フォールバック: 2秒後には強制で印刷
+        setTimeout(tryPrint, 2000);
+      } catch (e) {}
+    };
   }
 
   // 初期化

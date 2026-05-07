@@ -835,6 +835,44 @@ function getDailyReportData() {
   }
 }
 
+/**
+ * バーコード印刷用データを返す。
+ * 前処理シートB列(地点)/C列(色)を読んで、地点ごとに存在する色を集計。
+ *
+ * 戻り値: { ok, points: [{point, colors: ['R','B','K']}, ...] }
+ */
+function getBarcodePrintData() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const zen = ss.getSheetByName(SHEET_ZENSHORI);
+    if (!zen) return { ok: false, message: '前処理シートが見つかりません' };
+    const lastRow = zen.getLastRow();
+    if (lastRow < 2) return { ok: false, message: '前処理シートにデータがありません' };
+
+    const bc = zen.getRange(2, COL_ZENSHORI.POINT, lastRow - 1, 2).getValues();
+    const map = {};   // point → Set<color>
+    const order = []; // 出現順を保持
+    for (const row of bc) {
+      const p = String(row[0]).trim();
+      const c = String(row[1]).trim().toUpperCase();
+      if (!p) continue;
+      if (BARCODE_COLORS.indexOf(c) < 0) continue;
+      if (!map[p]) { map[p] = {}; order.push(p); }
+      map[p][c] = true;
+    }
+    const points = order
+      .map(p => ({ point: p, colors: BARCODE_COLORS.filter(c => map[p][c]) }))
+      .filter(item => item.colors.length > 0);
+
+    if (points.length === 0) {
+      return { ok: false, message: '印刷対象のバーコードがありません(C列に色情報が無い)' };
+    }
+    return { ok: true, points: points };
+  } catch (e) {
+    return { ok: false, message: 'エラー: ' + e.message };
+  }
+}
+
 // ========== ユーティリティ ==========
 function udDisplay(ud) {
   const s = String(ud).toLowerCase().trim();
