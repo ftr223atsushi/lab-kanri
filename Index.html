@@ -310,10 +310,6 @@
       <button id="manualSendBtn" type="button">送信</button>
     </div>
     <div class="hint" id="scanHint">スキャナーモード: 80ms静止で自動送信</div>
-    <div id="debugBox" style="margin-top:8px;padding:6px 8px;background:#f0f4c3;border:1px solid #afb42b;border-radius:4px;font-size:11px;font-family:monospace;color:#33691e;max-height:90px;overflow-y:auto;">
-      <div style="font-weight:bold;color:#827717;">🔍 デバッグ (受信ログ)</div>
-      <div id="debugLog">待機中...</div>
-    </div>
   </div>
 
   <div id="result" class="result idle">
@@ -451,22 +447,10 @@
   const SCANNER_IDLE_MS = 80; // スキャナーモード時、最後の入力からこの時間無入力で自動送信
 
   // IME入力中フラグ(手打ちモードで日本語IMEが暴れないように)
-  scanInput.addEventListener('compositionstart', (e) => {
-    isComposing = true;
-    debugLog('compositionstart', e.data || '');
-  });
-  scanInput.addEventListener('compositionend', (e) => {
-    isComposing = false;
-    debugLog('compositionend', e.data || '');
-  });
+  scanInput.addEventListener('compositionstart', () => { isComposing = true; });
+  scanInput.addEventListener('compositionend',   () => { isComposing = false; });
 
-  scanInput.addEventListener('keydown', (e) => {
-    // Enter は別の keydown ハンドラで処理。ここはデバッグログのみ。
-    debugLog('keydown', e.key + (e.isComposing ? '(IME)' : ''));
-  });
-
-  scanInput.addEventListener('input', (e) => {
-    debugLog('input', scanInput.value);
+  scanInput.addEventListener('input', () => {
     // 自動モード切替ヒント表示用
     function updateAutoHint() {
       const v = (scanInput.value || '').trim().toLowerCase();
@@ -531,10 +515,8 @@
   // 統一送信処理: Enter / 送信ボタン / 自動送信デバウンス から呼ばれる
   function submitFromInput() {
     if (autoSubmitTimer) { clearTimeout(autoSubmitTimer); autoSubmitTimer = null; }
-    debugLog('SUBMIT raw', scanInput.value);
     // 手打ちモードでも送信時に正規化(全角混入対策)
     const code = normalizeCode(scanInput.value);
-    debugLog('SUBMIT norm', code);
     scanInput.value = ''; // 送信前に即クリア(次の入力が混入しないように)
     if (!code) return;
     try {
@@ -746,24 +728,6 @@
     focusInput();
   }
 
-  // ---- デバッグ受信ログ ----
-  const debugLogEl = document.getElementById('debugLog');
-  const debugLines = [];
-  const DEBUG_MAX = 8;
-  function debugLog(label, value) {
-    const t = new Date();
-    const ts = t.toLocaleTimeString('ja-JP', { hour12:false }) + '.' +
-               String(t.getMilliseconds()).padStart(3,'0');
-    // 不可視文字を可視化
-    const shown = String(value)
-      .replace(/\r/g, '⏎')
-      .replace(/\n/g, '↵')
-      .replace(/\t/g, '⇥')
-      .replace(/ /g, '·');
-    debugLines.unshift(ts + ' [' + label + '] len=' + String(value).length + ' "' + shown + '"');
-    if (debugLines.length > DEBUG_MAX) debugLines.pop();
-    if (debugLogEl) debugLogEl.innerHTML = debugLines.map(escapeHtml).join('<br>');
-  }
   modeScannerBtn.addEventListener('click', () => setInputMode('scanner'));
   modeManualBtn.addEventListener('click',  () => setInputMode('manual'));
 
