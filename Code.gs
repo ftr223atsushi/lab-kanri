@@ -501,14 +501,14 @@ function generateBarcodesForPoint(ss, point) {
   const startRow = Math.max(bsLastRow + 1, 2);
   bs.getRange(startRow, 1, newRows.length, 5).setValues(newRows);
 
-  // E列にQR画像数式を設定
+  // E列にQR画像数式を設定 (api.qrserver.com を使用)
   const formulas = [];
   for (let i = 0; i < newRows.length; i++) {
     const r = startRow + i;
     formulas.push([
-      '=IMAGE("https://chart.googleapis.com/chart?cht=qr&chs=' +
+      '=IMAGE("https://api.qrserver.com/v1/create-qr-code/?size=' +
       BARCODE_QR_SIZE + 'x' + BARCODE_QR_SIZE +
-      '&chl="&ENCODEURL(D' + r + '))'
+      '&data="&ENCODEURL(D' + r + '))'
     ]);
   }
   bs.getRange(startRow, 5, newRows.length, 1).setFormulas(formulas);
@@ -517,6 +517,38 @@ function generateBarcodesForPoint(ss, point) {
   bs.setRowHeights(startRow, newRows.length, BARCODE_ROW_HEIGHT);
 
   return { added: newRows.length, colors: colors };
+}
+
+/**
+ * 既存のバーコード作成シートのE列(QR数式)を最新仕様で書き直す。
+ * 旧 chart.googleapis.com → api.qrserver.com に切替するなど、
+ * 数式URLを一括更新したい時に使用。
+ *
+ * 実行方法: Apps Scriptエディタで関数 fixBarcodeQrFormulas を選択して▶実行
+ */
+function fixBarcodeQrFormulas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const bs = ss.getSheetByName(SHEET_BARCODE_GEN);
+  if (!bs) {
+    SpreadsheetApp.getUi().alert('バーコード作成シートが見つかりません');
+    return;
+  }
+  const lastRow = bs.getLastRow();
+  if (lastRow < 2) {
+    SpreadsheetApp.getUi().alert('バーコード行がありません');
+    return;
+  }
+  const formulas = [];
+  for (let r = 2; r <= lastRow; r++) {
+    formulas.push([
+      '=IMAGE("https://api.qrserver.com/v1/create-qr-code/?size=' +
+      BARCODE_QR_SIZE + 'x' + BARCODE_QR_SIZE +
+      '&data="&ENCODEURL(D' + r + '))'
+    ]);
+  }
+  bs.getRange(2, 5, formulas.length, 1).setFormulas(formulas);
+  bs.setRowHeights(2, formulas.length, BARCODE_ROW_HEIGHT);
+  SpreadsheetApp.getUi().alert('QR数式を更新: ' + formulas.length + '行');
 }
 
 /**
