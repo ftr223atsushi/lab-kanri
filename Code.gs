@@ -53,7 +53,7 @@ const CARD_COLS            = 6;    // 横6カード
 const CARD_ROWS_PER_BLOCK  = 4;    // QR(1) + 色(1) + ラベル(1) + 空白(1)
 const CARD_COL_WIDTH       = 120;  // 列幅: QR80 + 左右余白(切り取り用隙間)
 const ROW_QR_HEIGHT        = 77;
-const ROW_COLOR_HEIGHT     = 26;
+const ROW_COLOR_HEIGHT     = 20;
 const ROW_LABEL_HEIGHT     = 20;
 const ROW_GAP_HEIGHT       = 8;
 const HEADER_ROW_HEIGHT    = 24;
@@ -582,7 +582,7 @@ function writeBarcodeBlock(bs, top, point, colorSet) {
   colorRange.setValues([colorTexts]);
   colorRange.setFontColor('#ffffff');
   colorRange.setFontWeight('bold');
-  colorRange.setFontSize(13);
+  colorRange.setFontSize(11);
   colorRange.setHorizontalAlignment('center');
   colorRange.setVerticalAlignment('middle');
 
