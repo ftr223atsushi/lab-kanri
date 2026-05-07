@@ -294,6 +294,12 @@
     <button id="sendBtn" class="send-btn" disabled>送信</button>
   </div>
 
+  <div id="inputModeRow" class="batch-row">
+    <button id="modeScanner" class="batch-toggle active">スキャナー</button>
+    <button id="modeManual" class="batch-toggle">⌨ 手打ち</button>
+    <span style="flex:1;font-size:11px;color:#888;text-align:right;">バーコードが汚れて読めない時は手打ち</span>
+  </div>
+
   <div class="scan-area">
     <div class="mode-status">
       モード: <span id="currentMode" class="current">未選択</span>
@@ -303,7 +309,7 @@
       <input type="text" id="scanInput" placeholder="ここにスキャン..." autocomplete="off" inputmode="text" autofocus>
       <button id="manualSendBtn" type="button">送信</button>
     </div>
-    <div class="hint">USBリーダー: 自動送信 / 手入力: Enter または「送信」ボタン</div>
+    <div class="hint" id="scanHint">スキャナーモード: 80ms静止で自動送信</div>
   </div>
 
   <div id="result" class="result idle">
@@ -434,54 +440,52 @@
       .trim();
   }
 
-  // 入力タイミング追跡: USBリーダー(高速) vs 手入力(低速) を判別
+  // 入力モード: 'scanner'(既定) / 'manual'(手打ち)
+  let inputMode = 'scanner';
   let autoSubmitTimer = null;
-  let inputTimestamps = [];        // 直近の入力時刻
-  const SCANNER_INTERVAL_MS = 50;  // この間隔以下なら「スキャナ入力」と判定
-  const SCANNER_IDLE_MS = 200;     // スキャナ入力後、この時間無入力で自動送信
-  const TIMESTAMPS_KEEP = 5;       // 直近 N 個だけ保持
+  let isComposing = false;
+  const SCANNER_IDLE_MS = 80; // スキャナーモード時、最後の入力からこの時間無入力で自動送信
+
+  // IME入力中フラグ(手打ちモードで日本語IMEが暴れないように)
+  scanInput.addEventListener('compositionstart', () => { isComposing = true; });
+  scanInput.addEventListener('compositionend', () => { isComposing = false; });
 
   scanInput.addEventListener('input', () => {
-    // 全角混入を即座に半角化(IMEが日本語固定でも数字・英字・ハイフンは即変換)
-    const before = scanInput.value;
-    const after = normalizeCode(before);
-    if (before !== after) {
-      const pos = scanInput.selectionStart;
-      scanInput.value = after;
-      try { scanInput.setSelectionRange(pos, pos); } catch (e) {}
-    }
-
-    const v = after.trim().toLowerCase();
-    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('auto-hint'));
-    let auto = null;
-    if (v.endsWith('-huri')) auto = '振り';
-    else if (v.endsWith('-roka')) auto = currentMode === '分析' ? '分析' : 'ろか';
-    if (auto) {
-      const target = document.querySelector('.mode-btn[data-mode="' + auto + '"]');
-      if (target && !target.classList.contains('active')) target.classList.add('auto-hint');
-    }
-
-    // 入力速度を見てスキャナ判定
-    const now = Date.now();
-    inputTimestamps.push(now);
-    if (inputTimestamps.length > TIMESTAMPS_KEEP) inputTimestamps.shift();
-
-    // 直近の入力間隔をすべて計算
-    let allFast = inputTimestamps.length >= 2;
-    for (let i = 1; i < inputTimestamps.length && allFast; i++) {
-      if (inputTimestamps[i] - inputTimestamps[i - 1] > SCANNER_INTERVAL_MS) {
-        allFast = false;
+    // 自動モード切替ヒント表示用
+    function updateAutoHint() {
+      const v = (scanInput.value || '').trim().toLowerCase();
+      document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('auto-hint'));
+      let auto = null;
+      if (v.endsWith('-huri')) auto = '振り';
+      else if (v.endsWith('-roka')) auto = currentMode === '分析' ? '分析' : 'ろか';
+      if (auto) {
+        const target = document.querySelector('.mode-btn[data-mode="' + auto + '"]');
+        if (target && !target.classList.contains('active')) target.classList.add('auto-hint');
       }
     }
 
-    // 自動送信は「スキャナ入力」かつ「3文字以上」の場合のみ。
-    // 手入力(間隔が遅い)では自動送信せず、Enter または 送信ボタン待ち。
-    if (autoSubmitTimer) clearTimeout(autoSubmitTimer);
-    if (allFast && v.length >= 3) {
-      autoSubmitTimer = setTimeout(() => {
-        autoSubmitTimer = null;
-        if (scanInput.value.trim().length >= 3) submitFromInput();
-      }, SCANNER_IDLE_MS);
+    if (inputMode === 'scanner') {
+      // スキャナーモード: 全角→半角を即時正規化、80ms静止で自動送信
+      const before = scanInput.value;
+      const after = normalizeCode(before);
+      if (before !== after) {
+        const pos = scanInput.selectionStart;
+        scanInput.value = after;
+        try { scanInput.setSelectionRange(pos, pos); } catch (e) {}
+      }
+      updateAutoHint();
+
+      if (autoSubmitTimer) clearTimeout(autoSubmitTimer);
+      if (scanInput.value.trim().length >= 1) {
+        autoSubmitTimer = setTimeout(() => {
+          autoSubmitTimer = null;
+          if (scanInput.value.trim().length >= 1) submitFromInput();
+        }, SCANNER_IDLE_MS);
+      }
+    } else {
+      // 手打ちモード: 値を書き換えない(IMEを邪魔しない)、自動送信しない
+      // ヒント表示だけは一応出す(IME確定後の値で)
+      if (!isComposing) updateAutoHint();
     }
   });
 
@@ -511,7 +515,7 @@
   // 統一送信処理: Enter / 送信ボタン / 自動送信デバウンス から呼ばれる
   function submitFromInput() {
     if (autoSubmitTimer) { clearTimeout(autoSubmitTimer); autoSubmitTimer = null; }
-    inputTimestamps = []; // 入力履歴もクリア(次の入力を新規スキャンとして判定)
+    // 手打ちモードでも送信時に正規化(全角混入対策)
     const code = normalizeCode(scanInput.value);
     scanInput.value = ''; // 送信前に即クリア(次の入力が混入しないように)
     if (!code) return;
@@ -702,6 +706,27 @@
 
   // 旧API互換
   function beep(ok) { ok ? beepSuccess() : beepError(); }
+
+  // ---- 入力モード(スキャナー / 手打ち)切替 ----
+  const modeScannerBtn = document.getElementById('modeScanner');
+  const modeManualBtn  = document.getElementById('modeManual');
+  const scanHintEl     = document.getElementById('scanHint');
+
+  function setInputMode(mode) {
+    inputMode = (mode === 'manual') ? 'manual' : 'scanner';
+    modeScannerBtn.classList.toggle('active', inputMode === 'scanner');
+    modeManualBtn.classList.toggle('active',  inputMode === 'manual');
+    if (scanHintEl) {
+      scanHintEl.textContent = inputMode === 'scanner'
+        ? 'スキャナーモード: 80ms静止で自動送信'
+        : '手打ちモード: 入力後 Enter または「送信」ボタンで送信';
+    }
+    // 自動送信タイマーが残っていればキャンセル
+    if (autoSubmitTimer) { clearTimeout(autoSubmitTimer); autoSubmitTimer = null; }
+    focusInput();
+  }
+  modeScannerBtn.addEventListener('click', () => setInputMode('scanner'));
+  modeManualBtn.addEventListener('click',  () => setInputMode('manual'));
 
   // ---- まとめてモード(バッチ) ----
   const batchToggleBtn = document.getElementById('batchToggle');
