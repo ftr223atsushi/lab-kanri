@@ -48,11 +48,11 @@ const BARCODE_COLOR_HEX = {
   B: '#1e88e5', // 青
   K: '#000000'  // 黒
 };
-const BARCODE_QR_SIZE      = 80;   // QR画像px (mode 4 で実寸)
+const BARCODE_QR_SIZE      = 72;   // QR画像px (mode 4 で実寸)
 const CARD_COLS            = 6;    // 横6カード
 const CARD_ROWS_PER_BLOCK  = 4;    // QR(1) + 色(1) + ラベル(1) + 空白(1)
 const CARD_COL_WIDTH       = 120;  // 列幅: QR80 + 左右余白(切り取り用隙間)
-const ROW_QR_HEIGHT        = 85;
+const ROW_QR_HEIGHT        = 77;
 const ROW_COLOR_HEIGHT     = 26;
 const ROW_LABEL_HEIGHT     = 20;
 const ROW_GAP_HEIGHT       = 8;
