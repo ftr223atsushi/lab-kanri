@@ -1007,6 +1007,27 @@
   // ---- バーコード印刷 ----
   document.getElementById('printBarcodeBtn').addEventListener('click', printBarcodeSheet);
 
+  // 印刷タブからの「印刷完了」通知を受け取り → サーバーでチェック解除
+  window.addEventListener('message', function(ev) {
+    if (!ev || !ev.data || ev.data.type !== 'shast-printed') return;
+    const points = Array.isArray(ev.data.points) ? ev.data.points : [];
+    if (points.length === 0) return;
+    google.script.run
+      .withSuccessHandler(res => {
+        if (res && res.ok) {
+          setResult('ok', '✓ 印刷済みマーク完了: ' + (res.unchecked || 0) + '地点 のチェックを外しました');
+        } else {
+          setResult('warn', '印刷済みマーク失敗: ' + ((res && res.message) || '不明なエラー'));
+        }
+        focusInput();
+      })
+      .withFailureHandler(e => {
+        setResult('error', '印刷済みマーク通信エラー: ' + e.message);
+        focusInput();
+      })
+      .markBarcodePrinted(points);
+  });
+
   function printBarcodeSheet() {
     const btn = document.getElementById('printBarcodeBtn');
     btn.disabled = true;
@@ -1086,6 +1107,7 @@
     }
 
     const blocksHtml = data.points.map(buildBlock).join('');
+    const pointsJson = JSON.stringify(data.points.map(p => p.point));
 
     const html =
       '<!DOCTYPE html>' +
@@ -1118,17 +1140,52 @@
           'padding: 2px 0 6px 0; ' +
         '}' +
         '.noprint { margin-top: 16px; text-align: center; }' +
-        '.noprint button { padding: 10px 20px; font-size: 14px; cursor: pointer; margin: 0 4px; }' +
-        '@media print { .noprint { display: none; } }' +
+        '.noprint button { padding: 12px 22px; font-size: 14px; cursor: pointer; margin: 4px; border-radius: 6px; border: 2px solid #888; background: #fff; }' +
+        '.btn-done { background: #2e7d32 !important; color: #fff; border-color: #1b5e20 !important; font-weight: bold; }' +
+        '.btn-keep { background: #fdd835 !important; color: #333; border-color: #c5a600 !important; font-weight: bold; }' +
+        '#postPrintBox { display:none; padding: 14px; border: 2px solid #1976d2; border-radius: 8px; background: #e3f2fd; margin-top: 16px; }' +
+        '#postPrintBox.show { display: block; }' +
+        '#postPrintBox p { font-size: 14px; margin: 0 0 10px 0; text-align: center; font-weight: bold; }' +
+        '#statusMsg { text-align: center; font-size: 13px; color: #2e7d32; margin-top: 8px; min-height: 18px; }' +
+        '@media print { .noprint, #postPrintBox, #statusMsg { display: none !important; } }' +
       '</style>' +
       '</head><body>' +
         '<h1>shast LAB バーコード一覧</h1>' +
         '<div class="sub">地点数: ' + data.points.length + '</div>' +
         blocksHtml +
         '<div class="noprint">' +
-          '<button onclick="window.print()">🖨 印刷</button>' +
+          '<button onclick="window.print()">🖨 もう一度印刷</button>' +
           '<button onclick="window.close()">閉じる</button>' +
         '</div>' +
+        '<div id="postPrintBox">' +
+          '<p>印刷は完了しましたか？</p>' +
+          '<div style="text-align:center;">' +
+            '<button class="btn-done" id="btnDone">✓ 印刷完了 (チェックを外す)</button>' +
+            '<button class="btn-keep" id="btnKeep">× 印刷ミス (チェック維持)</button>' +
+          '</div>' +
+        '</div>' +
+        '<div id="statusMsg"></div>' +
+        '<script>' +
+          'var POINTS = ' + pointsJson + ';' +
+          'var box = document.getElementById("postPrintBox");' +
+          'var status = document.getElementById("statusMsg");' +
+          'window.addEventListener("afterprint", function() { box.classList.add("show"); });' +
+          'document.getElementById("btnDone").addEventListener("click", function() {' +
+            'try {' +
+              'if (window.opener && !window.opener.closed) {' +
+                'window.opener.postMessage({ type: "shast-printed", points: POINTS }, "*");' +
+                'status.textContent = "✓ 印刷済みマーク送信済み (チェックを外しました)。タブを閉じて構いません。";' +
+                'box.classList.remove("show");' +
+              '} else {' +
+                'status.textContent = "✗ 親ウィンドウが閉じられているため、手動でチェックを外してください。";' +
+              '}' +
+            '} catch(e) { status.textContent = "✗ エラー: " + e.message; }' +
+          '});' +
+          'document.getElementById("btnKeep").addEventListener("click", function() {' +
+            'status.textContent = "○ チェック維持。再印刷可能です。";' +
+            'box.classList.remove("show");' +
+          '});' +
+        '<\/script>' +
       '</body></html>';
 
     w.document.open();

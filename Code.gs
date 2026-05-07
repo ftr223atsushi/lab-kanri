@@ -57,6 +57,7 @@ const ROW_COLOR_HEIGHT     = 26;
 const ROW_LABEL_HEIGHT     = 20;
 const ROW_GAP_HEIGHT       = 8;
 const HEADER_ROW_HEIGHT    = 24;
+const BARCODE_PRINT_FLAG_COL = 7; // G列: 印刷フラグ用チェックボックス
 
 // ========== 列定義 ==========
 const COL_KOTEI = {
@@ -446,10 +447,12 @@ function ensureBarcodeSheet(ss) {
   if (!sheet) {
     sheet = ss.insertSheet(SHEET_BARCODE_GEN);
   }
-  // 6列の列幅
+  // 6列の列幅 + G列(チェックボックス)
   for (let c = 1; c <= CARD_COLS; c++) {
     sheet.setColumnWidth(c, CARD_COL_WIDTH);
   }
+  sheet.setColumnWidth(BARCODE_PRINT_FLAG_COL, 50);
+
   // ヘッダー行 (A1:F1 結合)
   const headerRange = sheet.getRange(1, 1, 1, CARD_COLS);
   const cur = String(headerRange.getCell(1, 1).getValue()).trim();
@@ -464,6 +467,17 @@ function ensureBarcodeSheet(ss) {
       .setBackground('#f5f5f5');
     sheet.setRowHeight(1, HEADER_ROW_HEIGHT);
     sheet.setFrozenRows(1);
+  }
+  // G1 ヘッダー (印刷フラグ列)
+  const flagHeader = sheet.getRange(1, BARCODE_PRINT_FLAG_COL);
+  if (!String(flagHeader.getValue()).trim()) {
+    flagHeader
+      .setValue('印刷')
+      .setFontWeight('bold')
+      .setFontSize(11)
+      .setHorizontalAlignment('center')
+      .setVerticalAlignment('middle')
+      .setBackground('#f5f5f5');
   }
   return sheet;
 }
@@ -589,6 +603,13 @@ function writeBarcodeBlock(bs, top, point, colorSet) {
   bs.setRowHeight(colorRow, ROW_COLOR_HEIGHT);
   bs.setRowHeight(labelRow, ROW_LABEL_HEIGHT);
   bs.setRowHeight(gapRow, ROW_GAP_HEIGHT);
+
+  // 印刷フラグ用チェックボックス (ラベル行のG列、初期=TRUE=印刷待ち)
+  const flagCell = bs.getRange(labelRow, BARCODE_PRINT_FLAG_COL);
+  const checkboxRule = SpreadsheetApp.newDataValidation().requireCheckbox().build();
+  flagCell.setDataValidation(checkboxRule);
+  flagCell.setValue(true);
+  flagCell.setHorizontalAlignment('center');
 }
 
 /**
@@ -837,37 +858,101 @@ function getDailyReportData() {
 
 /**
  * バーコード印刷用データを返す。
- * 前処理シートB列(地点)/C列(色)を読んで、地点ごとに存在する色を集計。
+ * バーコード作成シートのブロックを走査し、G列チェックボックスが TRUE の地点のみを対象。
+ * カードの色情報は ラベル行(各ブロック先頭+2)の値 "A1-1 R ろか" を解析して取得。
  *
  * 戻り値: { ok, points: [{point, colors: ['R','B','K']}, ...] }
  */
 function getBarcodePrintData() {
   try {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const zen = ss.getSheetByName(SHEET_ZENSHORI);
-    if (!zen) return { ok: false, message: '前処理シートが見つかりません' };
-    const lastRow = zen.getLastRow();
-    if (lastRow < 2) return { ok: false, message: '前処理シートにデータがありません' };
-
-    const bc = zen.getRange(2, COL_ZENSHORI.POINT, lastRow - 1, 2).getValues();
-    const map = {};   // point → Set<color>
-    const order = []; // 出現順を保持
-    for (const row of bc) {
-      const p = String(row[0]).trim();
-      const c = String(row[1]).trim().toUpperCase();
-      if (!p) continue;
-      if (BARCODE_COLORS.indexOf(c) < 0) continue;
-      if (!map[p]) { map[p] = {}; order.push(p); }
-      map[p][c] = true;
+    const bs = ss.getSheetByName(SHEET_BARCODE_GEN);
+    if (!bs) {
+      return { ok: false, message: 'バーコード作成シートが見つかりません(まずスキャン or regenerateAllBarcodes を実行)' };
     }
-    const points = order
-      .map(p => ({ point: p, colors: BARCODE_COLORS.filter(c => map[p][c]) }))
-      .filter(item => item.colors.length > 0);
+    const lastRow = bs.getLastRow();
+    if (lastRow < 4) {
+      return { ok: false, message: 'バーコード作成シートにデータがありません' };
+    }
+
+    const points = [];
+    // ラベル行 = 4, 8, 12...
+    for (let labelRow = 4; labelRow <= lastRow; labelRow += CARD_ROWS_PER_BLOCK) {
+      // ラベル6セル + チェックボックス1セル を一括取得
+      const range = bs.getRange(labelRow, 1, 1, BARCODE_PRINT_FLAG_COL).getValues()[0];
+      const labels = range.slice(0, CARD_COLS);
+      const checked = range[BARCODE_PRINT_FLAG_COL - 1];
+
+      const firstLabel = String(labels[0] || '').trim();
+      // ブロックが完全に空ならそこで終了
+      if (!firstLabel && !labels.some(v => String(v || '').trim())) break;
+      // チェック未選択ならスキップ
+      if (checked !== true) continue;
+
+      let point = null;
+      const colorSet = {};
+      for (let i = 0; i < labels.length; i++) {
+        const txt = String(labels[i] || '').trim();
+        if (!txt) continue;
+        // "A1-1 R ろか" 形式
+        const parts = txt.split(/\s+/);
+        if (parts.length < 2) continue;
+        if (!point) point = parts[0];
+        const color = parts[1];
+        if (BARCODE_COLORS.indexOf(color) >= 0) colorSet[color] = true;
+      }
+      if (point && Object.keys(colorSet).length > 0) {
+        points.push({
+          point: point,
+          colors: BARCODE_COLORS.filter(c => colorSet[c])
+        });
+      }
+    }
 
     if (points.length === 0) {
-      return { ok: false, message: '印刷対象のバーコードがありません(C列に色情報が無い)' };
+      return { ok: false, message: '印刷対象のバーコードがありません(チェックボックスを確認してください)' };
     }
     return { ok: true, points: points };
+  } catch (e) {
+    return { ok: false, message: 'エラー: ' + e.message };
+  }
+}
+
+/**
+ * 印刷完了マーク: 指定地点リストの G列チェックボックスを FALSE にする。
+ * クライアント側で印刷完了ボタンが押されたときに呼ばれる。
+ *
+ * @param {string[]} pointList 地点名の配列 (例: ['A1-1', 'A1-2'])
+ * @return {Object} { ok, unchecked: 件数 }
+ */
+function markBarcodePrinted(pointList) {
+  try {
+    if (!Array.isArray(pointList) || pointList.length === 0) {
+      return { ok: false, message: '対象地点がありません' };
+    }
+    const targetSet = {};
+    pointList.forEach(p => {
+      const s = String(p || '').trim();
+      if (s) targetSet[s] = true;
+    });
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const bs = ss.getSheetByName(SHEET_BARCODE_GEN);
+    if (!bs) return { ok: false, message: 'バーコード作成シートが見つかりません' };
+    const lastRow = bs.getLastRow();
+    if (lastRow < 4) return { ok: false, message: 'データなし' };
+
+    let unchecked = 0;
+    for (let labelRow = 4; labelRow <= lastRow; labelRow += CARD_ROWS_PER_BLOCK) {
+      const firstLabel = String(bs.getRange(labelRow, 1).getValue() || '').trim();
+      if (!firstLabel) break;
+      const point = firstLabel.split(/\s+/)[0];
+      if (targetSet[point]) {
+        bs.getRange(labelRow, BARCODE_PRINT_FLAG_COL).setValue(false);
+        unchecked++;
+      }
+    }
+    return { ok: true, unchecked: unchecked };
   } catch (e) {
     return { ok: false, message: 'エラー: ' + e.message };
   }
