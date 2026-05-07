@@ -196,7 +196,7 @@ function setCurrentWorker(name) {
  * @param {boolean} force - 順番警告無視
  * @return {Object}
  */
-function handleScan(mode, code, force) {
+function handleScan(mode, code, force, overrideWorker) {
   try {
     if (!code || !String(code).trim()) {
       return { ok: false, message: 'コードが空です' };
@@ -204,7 +204,10 @@ function handleScan(mode, code, force) {
     code = String(code).trim();
 
     const props = PropertiesService.getScriptProperties();
-    const worker = props.getProperty(PROP_CURRENT_WORKER) || '';
+    // ろか2段スキャンの場合は1個目（ろか）スキャン時点の担当者で記録する
+    const worker = (overrideWorker && String(overrideWorker).trim())
+      ? String(overrideWorker).trim()
+      : (props.getProperty(PROP_CURRENT_WORKER) || '');
     if (!worker) {
       return { ok: false, message: '担当者を選択してください' };
     }

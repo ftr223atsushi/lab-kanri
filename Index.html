@@ -96,6 +96,30 @@
     color: #fff;
     border-color: #ff8f00;
   }
+  .batch-toggle:disabled {
+    background: #eee;
+    color: #aaa;
+    border-color: #ccc;
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+  /* ろかペンディング (照合待ち) */
+  .result.pending {
+    border-left: 6px solid #fbc02d;
+    background: #fffde7;
+  }
+  .result-cancel-btn {
+    margin-top: 10px;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: bold;
+    background: #c62828;
+    color: #fff;
+    border: 2px solid #b71c1c;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .result-cancel-btn:hover { background: #b71c1c; }
   .queue-count {
     flex: 1;
     font-size: 14px;
@@ -297,7 +321,7 @@
     </div>
   </div>
 
-  <div class="section-label">工程モード（-huri / -roka は自動切替）</div>
+  <div class="section-label">工程モード</div>
   <div class="modes">
     <button class="mode-btn" data-mode="採取">採取</button>
     <button class="mode-btn" data-mode="受入">受入</button>
@@ -438,12 +462,42 @@
   });
 
   function setMode(mode) {
+    const prev = currentMode;
     currentMode = mode;
     document.querySelectorAll('.mode-btn').forEach(b => {
       b.classList.toggle('active', b.dataset.mode === mode);
       b.classList.remove('auto-hint');
     });
     document.getElementById('currentMode').textContent = mode || '未選択';
+    // ろかモード: まとめてモード使用不可
+    updateBatchAvailability();
+    // ろかモード以外に切り替わったらペンディングをクリア
+    if (prev === 'ろか' && mode !== 'ろか') {
+      cancelRokaPending('モード変更によりキャンセル');
+    }
+  }
+
+  // ろかモード時に まとめてモードボタンをグレーアウト。
+  // まとめてモードONでろかモード選択時はOFFに切り替え。
+  function updateBatchAvailability() {
+    const isRoka = (currentMode === 'ろか');
+    const btn = document.getElementById('batchToggle');
+    if (isRoka && batchMode) {
+      // 自動OFF
+      batchMode = false;
+      btn.classList.remove('active');
+      btn.textContent = '📦 まとめてモード';
+      const batchRow = document.getElementById('batchRow');
+      batchRow.classList.add('idle');
+      // キューに残っていれば送信
+      if (typeof scanQueue !== 'undefined' && scanQueue.length > 0) {
+        try { sendQueue(); } catch (_) {}
+      }
+      clearIdleTimer();
+      updateBatchUI();
+    }
+    btn.disabled = isRoka;
+    btn.title = isRoka ? 'ろかモード中はまとめて送信は無効です' : '';
   }
 
   // ---- 入力正規化(全角→半角) ----
@@ -531,6 +585,126 @@
     focusInput();
   });
 
+  // ---- ろか 2段階スキャン (照合) ----
+  // ろかモードでは ろかコード → 振りコード の順に2連続スキャン。
+  // 地点+色 が両方一致した場合のみ サーバーに ろか記録 を送る。
+  let rokaPending = null;       // {point, color, worker, code} 1個目を保持
+  let rokaPendingTimer = null;  // 15秒タイムアウト
+  const ROKA_PENDING_MS = 15000;
+
+  function parseSubCode(code) {
+    // "A1-1-R-roka" → { point:'A1-1', color:'R', suffix:'roka' }
+    const lower = String(code || '').toLowerCase();
+    if (!lower.endsWith('-huri') && !lower.endsWith('-roka')) return null;
+    const suffix = lower.endsWith('-huri') ? 'huri' : 'roka';
+    const body = code.substring(0, code.length - (suffix.length + 1));
+    const parts = body.split('-');
+    if (parts.length < 2) return null;
+    const color = parts[parts.length - 1].toUpperCase();
+    const point = parts.slice(0, -1).join('-');
+    return { point: point, color: color, suffix: suffix };
+  }
+
+  function startRokaPending(parsed, code) {
+    cancelRokaPendingTimer();
+    rokaPending = {
+      point: parsed.point,
+      color: parsed.color,
+      code: code,
+      worker: currentWorker
+    };
+    showRokaPendingUI();
+    rokaPendingTimer = setTimeout(() => {
+      cancelRokaPending('15秒経過したので自動キャンセル');
+    }, ROKA_PENDING_MS);
+  }
+
+  function cancelRokaPendingTimer() {
+    if (rokaPendingTimer) { clearTimeout(rokaPendingTimer); rokaPendingTimer = null; }
+  }
+
+  function cancelRokaPending(reasonMsg) {
+    cancelRokaPendingTimer();
+    rokaPending = null;
+    if (reasonMsg) {
+      setResult('idle', reasonMsg);
+    }
+    focusInput();
+  }
+
+  function showRokaPendingUI() {
+    if (!rokaPending) return;
+    const el = document.getElementById('result');
+    el.className = 'result pending';
+    el.innerHTML =
+      '<div class="result-msg">' +
+        '<strong>ろか受付：' + escapeHtml(rokaPending.point + ' ' + rokaPending.color) + '</strong><br>' +
+        '→ 元になるペコタンをスキャンしてください (15秒以内)' +
+      '</div>' +
+      '<button class="result-cancel-btn" id="rokaCancelBtn">キャンセル</button>';
+    const btn = document.getElementById('rokaCancelBtn');
+    if (btn) {
+      btn.addEventListener('click', () => {
+        cancelRokaPending('キャンセルしました');
+      });
+    }
+  }
+
+  // ろかモード時のスキャン処理。サーバー送信ではなくローカルで2段階制御。
+  // 戻り値 true: ここで処理した(以降の通常処理スキップ)
+  function handleRokaTwoStage(code) {
+    const parsed = parseSubCode(code);
+    if (!parsed) {
+      setResult('error', 'ろかモード: 「-roka / -huri」付きのコードをスキャンしてください');
+      beepError();
+      return true;
+    }
+
+    if (!rokaPending) {
+      // 1個目: -roka を期待
+      if (parsed.suffix !== 'roka') {
+        setResult('error', '先にろかコードをスキャンしてください (「-roka」付き)');
+        beepError();
+        return true;
+      }
+      startRokaPending(parsed, code);
+      beepQueue();
+      return true;
+    }
+
+    // ペンディング中
+    if (parsed.suffix === 'roka') {
+      // 1個目を上書き (操作者が「やっぱりこっちに変えたい」)
+      startRokaPending(parsed, code);
+      beepQueue();
+      return true;
+    }
+
+    // 2個目: -huri を期待 (照合)
+    if (rokaPending.point !== parsed.point || rokaPending.color !== parsed.color) {
+      setResult('error',
+        '✗ 一致しません: ろか=' + rokaPending.point + ' ' + rokaPending.color +
+        ' / 振り=' + parsed.point + ' ' + parsed.color +
+        ' (最初からやり直してください)'
+      );
+      addHistory('error', '一致しない: ろか=' + rokaPending.point + ' ' + rokaPending.color +
+                          ' vs 振り=' + parsed.point + ' ' + parsed.color);
+      beepError();
+      cancelRokaPendingTimer();
+      rokaPending = null;
+      focusInput();
+      return true;
+    }
+
+    // 一致 → サーバー送信 (担当者は1個目スキャン時のものを使う)
+    const rokaCode = rokaPending.code;
+    const rokaWorker = rokaPending.worker;
+    cancelRokaPendingTimer();
+    rokaPending = null;
+    submitScanWithWorker('ろか', rokaCode, false, rokaWorker);
+    return true;
+  }
+
   // 統一送信処理: Enter / 送信ボタン / 自動送信デバウンス から呼ばれる
   function submitFromInput() {
     if (autoSubmitTimer) { clearTimeout(autoSubmitTimer); autoSubmitTimer = null; }
@@ -539,6 +713,11 @@
     scanInput.value = ''; // 送信前に即クリア(次の入力が混入しないように)
     if (!code) return;
     try {
+      // ろかモード: 2段階スキャン
+      if (currentMode === 'ろか') {
+        handleRokaTwoStage(code);
+        return;
+      }
       if (batchMode) {
         addToQueue(currentMode || '', code);
       } else {
@@ -563,6 +742,15 @@
       .withSuccessHandler(onScanResult)
       .withFailureHandler(onScanError)
       .handleScan(mode, code, !!force);
+  }
+
+  // ろかモード2段スキャン用：1個目（ろか）を取得した時点の担当者で記録する
+  function submitScanWithWorker(mode, code, force, overrideWorker) {
+    setResult('idle', '送信中... ' + code);
+    google.script.run
+      .withSuccessHandler(onScanResult)
+      .withFailureHandler(onScanError)
+      .handleScan(mode, code, !!force, overrideWorker || '');
   }
 
   function onScanResult(res) {
