@@ -169,15 +169,35 @@
   .mode-status .current { font-size: 18px; font-weight: bold; color: #2e7d32; }
   .mode-status .worker  { font-size: 14px; color: #6a1b9a; margin-left: 8px; }
 
+  .scan-row {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+  }
   #scanInput {
-    width: 100%;
+    flex: 1;
     padding: 14px;
     font-size: 22px;
     border: 2px solid #2e7d32;
     border-radius: 8px;
     text-align: center;
     letter-spacing: 2px;
+    min-width: 0;
   }
+  #manualSendBtn {
+    padding: 0 22px;
+    font-size: 18px;
+    font-weight: bold;
+    background: #2e7d32;
+    color: #fff;
+    border: 2px solid #1b5e20;
+    border-radius: 8px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    white-space: nowrap;
+  }
+  #manualSendBtn:active { background: #1b5e20; }
+  #manualSendBtn:disabled { background: #bdbdbd; border-color: #9e9e9e; cursor: not-allowed; }
   #scanInput:focus {
     outline: none;
     border-color: #1b5e20;
@@ -279,8 +299,11 @@
       モード: <span id="currentMode" class="current">未選択</span>
       <span id="currentWorker" class="worker"></span>
     </div>
-    <input type="text" id="scanInput" placeholder="ここにスキャン..." autocomplete="off" autofocus>
-    <div class="hint">バーコードリーダーで読み取ると自動送信されます</div>
+    <div class="scan-row">
+      <input type="text" id="scanInput" placeholder="ここにスキャン..." autocomplete="off" inputmode="text" autofocus>
+      <button id="manualSendBtn" type="button">送信</button>
+    </div>
+    <div class="hint">USBリーダー読み取り後 約0.4秒で自動送信 / Enter / 送信ボタン</div>
   </div>
 
   <div id="result" class="result idle">
@@ -398,9 +421,34 @@
     document.getElementById('currentMode').textContent = mode || '未選択';
   }
 
+  // ---- 入力正規化(全角→半角) ----
+  function normalizeCode(s) {
+    if (!s) return '';
+    return String(s)
+      // 全角英数字 → 半角
+      .replace(/[\uFF01-\uFF5E]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+      // 全角スペース → 半角スペース
+      .replace(/\u3000/g, ' ')
+      // 各種ハイフン類(全角ハイフン、長音符など) → 半角ハイフン
+      .replace(/[\u2010-\u2015\u2212\uFF0D\u30FC\uFF70]/g, '-')
+      .trim();
+  }
+
   // 入力中の suffix を見て対応モードをハイライト(参考表示)
+  // + 自動送信デバウンサ(USBリーダーがEnter送らない場合の救済)
+  let autoSubmitTimer = null;
+  const AUTO_SUBMIT_MS = 400; // 入力停止後この時間で自動送信
   scanInput.addEventListener('input', () => {
-    const v = scanInput.value.trim().toLowerCase();
+    // 全角混入を即座に半角化(IMEが日本語固定でも数字・英字・ハイフンは即変換)
+    const before = scanInput.value;
+    const after = normalizeCode(before);
+    if (before !== after) {
+      const pos = scanInput.selectionStart;
+      scanInput.value = after;
+      try { scanInput.setSelectionRange(pos, pos); } catch (e) {}
+    }
+
+    const v = after.trim().toLowerCase();
     document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('auto-hint'));
     let auto = null;
     if (v.endsWith('-huri')) auto = '振り';
@@ -408,6 +456,15 @@
     if (auto) {
       const target = document.querySelector('.mode-btn[data-mode="' + auto + '"]');
       if (target && !target.classList.contains('active')) target.classList.add('auto-hint');
+    }
+
+    // 自動送信タイマー: 入力が止まってから AUTO_SUBMIT_MS 経過で送信
+    if (autoSubmitTimer) clearTimeout(autoSubmitTimer);
+    if (v.length >= 3) {
+      autoSubmitTimer = setTimeout(() => {
+        autoSubmitTimer = null;
+        if (scanInput.value.trim().length >= 3) submitFromInput();
+      }, AUTO_SUBMIT_MS);
     }
   });
 
@@ -420,28 +477,44 @@
     }
   }, 500);
 
-  // Enter送信 (またはまとめてモードならキュー追加)
+  // Enter押下 → 送信
   scanInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      const code = scanInput.value.trim();
-      if (!code) return;
-      try {
-        if (batchMode) {
-          addToQueue(currentMode || '', code);
-        } else {
-          submitScan(currentMode || '', code, false);
-        }
-      } catch (err) {
-        console.error('scan handler error:', err);
-        setResult('error', '内部エラー: ' + err.message);
-      }
-      scanInput.value = '';
+      submitFromInput();
     }
   });
 
+  // 送信ボタン → 送信(タブレット用、Enterキーが無い端末向け)
+  document.getElementById('manualSendBtn').addEventListener('click', () => {
+    submitFromInput();
+    focusInput();
+  });
+
+  // 統一送信処理: Enter / 送信ボタン / 自動送信デバウンス から呼ばれる
+  function submitFromInput() {
+    if (autoSubmitTimer) { clearTimeout(autoSubmitTimer); autoSubmitTimer = null; }
+    const code = normalizeCode(scanInput.value);
+    if (!code) return;
+    try {
+      if (batchMode) {
+        addToQueue(currentMode || '', code);
+      } else {
+        submitScan(currentMode || '', code, false);
+      }
+    } catch (err) {
+      console.error('scan handler error:', err);
+      setResult('error', '内部エラー: ' + err.message);
+    }
+    scanInput.value = '';
+  }
+
   // スキャンエリアをタップで明示的にフォーカス(タブレットのキーボード表示用)
-  document.querySelector('.scan-area').addEventListener('click', focusInput);
+  document.querySelector('.scan-area').addEventListener('click', (e) => {
+    // 送信ボタンクリックはそのまま透過
+    if (e.target && e.target.id === 'manualSendBtn') return;
+    focusInput();
+  });
 
   function submitScan(mode, code, force) {
     setResult('idle', '送信中... ' + code);
