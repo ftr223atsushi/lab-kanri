@@ -30,16 +30,33 @@ const SHEET_ZENSHORI    = '前処理';
 const SHEET_BUNSEKI     = '分析';
 const SHEET_BARCODE_GEN = 'バーコード作成';
 
-// ========== バーコード生成定義 ==========
-const BARCODE_GEN_HEADER = ['地点', '色', '工程', 'コード', 'QR'];
-const BARCODE_COLORS     = ['R', 'B', 'K'];
-const BARCODE_SUFFIXES   = [
-  { suffix: 'huri', label: '振り' },
-  { suffix: 'roka', label: 'ろか' }
+// ========== バーコード生成定義 (印刷向けレイアウト) ==========
+// 1地点 = 6カード(R/B/K × ろか/振り) を横1行に並べる
+// カード = 3行(QR / 色マーク / ラベル) + 地点間に空白1行
+// A4縦・8地点想定
+const BARCODE_COLORS = ['R', 'B', 'K'];
+const BARCODE_CARD_LAYOUT = [
+  { color: 'R', suffix: 'roka', label: 'ろか' },
+  { color: 'B', suffix: 'roka', label: 'ろか' },
+  { color: 'K', suffix: 'roka', label: 'ろか' },
+  { color: 'R', suffix: 'huri', label: '振り' },
+  { color: 'B', suffix: 'huri', label: '振り' },
+  { color: 'K', suffix: 'huri', label: '振り' }
 ];
-// QR画像サイズ(px) と 行の高さ
-const BARCODE_QR_SIZE    = 150;
-const BARCODE_ROW_HEIGHT = 160;
+const BARCODE_COLOR_HEX = {
+  R: '#e53935', // 赤
+  B: '#1e88e5', // 青
+  K: '#000000'  // 黒
+};
+const BARCODE_QR_SIZE      = 80;   // QR画像px (mode 4 で実寸)
+const CARD_COLS            = 6;    // 横6カード
+const CARD_ROWS_PER_BLOCK  = 4;    // QR(1) + 色(1) + ラベル(1) + 空白(1)
+const CARD_COL_WIDTH       = 95;   // 列幅: QR80 + 余白
+const ROW_QR_HEIGHT        = 85;
+const ROW_COLOR_HEIGHT     = 15;
+const ROW_LABEL_HEIGHT     = 20;
+const ROW_GAP_HEIGHT       = 8;
+const HEADER_ROW_HEIGHT    = 24;
 
 // ========== 列定義 ==========
 const COL_KOTEI = {
@@ -421,35 +438,61 @@ function addToMaster(ss, sheetName, point) {
 // ========== バーコード作成シート生成 ==========
 
 /**
- * バーコード作成シートを取得(なければ作成)、ヘッダーが空なら設定。
+ * バーコード作成シートを取得(なければ作成)。
+ * 列幅・ヘッダー行・固定行を A4縦印刷用にセット。
  */
 function ensureBarcodeSheet(ss) {
   let sheet = ss.getSheetByName(SHEET_BARCODE_GEN);
   if (!sheet) {
     sheet = ss.insertSheet(SHEET_BARCODE_GEN);
   }
-  const headerRange = sheet.getRange(1, 1, 1, BARCODE_GEN_HEADER.length);
-  const existing = headerRange.getValues()[0];
-  const isEmpty = existing.every(v => !v && v !== 0);
-  if (isEmpty) {
-    headerRange.setValues([BARCODE_GEN_HEADER]);
-    headerRange.setFontWeight('bold');
-    headerRange.setHorizontalAlignment('center');
+  // 6列の列幅
+  for (let c = 1; c <= CARD_COLS; c++) {
+    sheet.setColumnWidth(c, CARD_COL_WIDTH);
+  }
+  // ヘッダー行 (A1:F1 結合)
+  const headerRange = sheet.getRange(1, 1, 1, CARD_COLS);
+  const cur = String(headerRange.getCell(1, 1).getValue()).trim();
+  if (!cur) {
+    try { headerRange.merge(); } catch (e) {}
+    headerRange
+      .setValue('shast LAB バーコード一覧')
+      .setFontWeight('bold')
+      .setFontSize(12)
+      .setHorizontalAlignment('center')
+      .setVerticalAlignment('middle')
+      .setBackground('#f5f5f5');
+    sheet.setRowHeight(1, HEADER_ROW_HEIGHT);
     sheet.setFrozenRows(1);
-    sheet.setColumnWidth(1, 80);                      // 地点
-    sheet.setColumnWidth(2, 50);                      // 色
-    sheet.setColumnWidth(3, 60);                      // 工程
-    sheet.setColumnWidth(4, 160);                     // コード
-    sheet.setColumnWidth(5, BARCODE_QR_SIZE + 20);    // QR
   }
   return sheet;
 }
 
 /**
- * 指定地点のバーコードを生成。
- * 前処理シートの B/C列を読んで、その地点について C列が空でない色だけ
- * (color × 振り/ろか) の組合せ分のコード行をバーコード作成シートに追加。
- * 既に同じコードが存在する行はスキップ(重複防止)。
+ * バーコード作成シートで該当地点のブロック数(=行位置インデックス)を返す。
+ * 既存ブロックを ラベル行(各ブロック先頭+2)の col1 文字列で識別。
+ *  - 戻り値: 既存ブロック先頭行 (>=2) または 新規追加すべき先頭行
+ */
+function findOrAllocateBlockTop(bs, point) {
+  const lastRow = bs.getLastRow();
+  let blockCount = 0;
+  // ラベル行 = ブロック先頭+2 → 行 4, 8, 12...
+  for (let r = 4; r <= lastRow; r += CARD_ROWS_PER_BLOCK) {
+    const v = String(bs.getRange(r, 1).getValue()).trim();
+    if (!v) break;
+    if (v.indexOf(point + ' ') === 0) {
+      return { top: r - 2, isNew: false };
+    }
+    blockCount++;
+  }
+  return { top: 2 + blockCount * CARD_ROWS_PER_BLOCK, isNew: true };
+}
+
+/**
+ * 指定地点のバーコードカードブロックを書き込む。
+ * 1ブロック = 4行 (QR行 / 色マーク行 / ラベル行 / 空白行)
+ * 横6カード = R-ろか / B-ろか / K-ろか / R-振り / B-振り / K-振り
+ * 該当地点で C列に存在しない色のセルは空欄(歯抜け)。
  */
 function generateBarcodesForPoint(ss, point) {
   const zen = ss.getSheetByName(SHEET_ZENSHORI);
@@ -457,103 +500,91 @@ function generateBarcodesForPoint(ss, point) {
   const lastRow = zen.getLastRow();
   if (lastRow < 2) return { added: 0, message: '前処理にデータなし' };
 
-  // B/C列を一括取得 → この地点で C列が非空の色を抽出
+  // 当該地点で C列が非空の色を抽出
   const bc = zen.getRange(2, COL_ZENSHORI.POINT, lastRow - 1, 2).getValues();
-  const colors = [];
+  const colorSet = {};
   const target = String(point).trim();
   for (const row of bc) {
     const p = String(row[0]).trim();
     const c = String(row[1]).trim().toUpperCase();
-    if (p === target && c && BARCODE_COLORS.indexOf(c) >= 0) {
-      if (colors.indexOf(c) < 0) colors.push(c);
+    if (p === target && BARCODE_COLORS.indexOf(c) >= 0) {
+      colorSet[c] = true;
     }
   }
-  if (colors.length === 0) {
+  const colorCount = Object.keys(colorSet).length;
+  if (colorCount === 0) {
     return { added: 0, message: 'C列に色情報なし(' + point + ')' };
   }
 
   const bs = ensureBarcodeSheet(ss);
-  const bsLastRow = bs.getLastRow();
+  const alloc = findOrAllocateBlockTop(bs, target);
+  writeBarcodeBlock(bs, alloc.top, target, colorSet);
+  return { added: colorCount, point: target, top: alloc.top, isNew: alloc.isNew };
+}
 
-  // 既存コード集合(D列)で重複チェック
-  const existingCodes = {};
-  if (bsLastRow >= 2) {
-    const codes = bs.getRange(2, 4, bsLastRow - 1, 1).getValues();
-    for (let i = 0; i < codes.length; i++) {
-      const v = String(codes[i][0]).trim();
-      if (v) existingCodes[v] = true;
+/**
+ * 1ブロックを書き込む (top行から4行ぶん)。
+ */
+function writeBarcodeBlock(bs, top, point, colorSet) {
+  const qrRow    = top;
+  const colorRow = top + 1;
+  const labelRow = top + 2;
+  const gapRow   = top + 3;
+
+  const qrFormulas = [];
+  const colorBgs   = [];
+  const labels     = [];
+
+  for (const card of BARCODE_CARD_LAYOUT) {
+    if (colorSet[card.color]) {
+      const code = point + '-' + card.color + '-' + card.suffix;
+      qrFormulas.push(
+        '=IMAGE("https://api.qrserver.com/v1/create-qr-code/?size=' +
+        BARCODE_QR_SIZE + 'x' + BARCODE_QR_SIZE +
+        '&data="&ENCODEURL("' + code + '"), 4, ' +
+        BARCODE_QR_SIZE + ', ' + BARCODE_QR_SIZE + ')'
+      );
+      colorBgs.push(BARCODE_COLOR_HEX[card.color]);
+      labels.push(point + ' ' + card.color + ' ' + card.label);
+    } else {
+      qrFormulas.push('');
+      colorBgs.push('#ffffff');
+      labels.push('');
     }
   }
 
-  // 生成行を組み立て
-  const newRows = [];
-  colors.forEach(color => {
-    BARCODE_SUFFIXES.forEach(s => {
-      const code = point + '-' + color + '-' + s.suffix;
-      if (existingCodes[code]) return;
-      newRows.push([point, color, s.label, code, '']);
-    });
-  });
-  if (newRows.length === 0) {
-    return { added: 0, message: '既に生成済み(' + point + ')' };
-  }
+  // QR行
+  const qrRange = bs.getRange(qrRow, 1, 1, CARD_COLS);
+  qrRange.setFormulas([qrFormulas]);
+  qrRange.setHorizontalAlignment('center').setVerticalAlignment('middle');
 
-  const startRow = Math.max(bsLastRow + 1, 2);
-  bs.getRange(startRow, 1, newRows.length, 5).setValues(newRows);
+  // 色マーク行
+  const colorRange = bs.getRange(colorRow, 1, 1, CARD_COLS);
+  colorRange.setBackgrounds([colorBgs]);
+  colorRange.setValues([['', '', '', '', '', '']]);
 
-  // E列にQR画像数式を設定 (api.qrserver.com を使用)
-  const formulas = [];
-  for (let i = 0; i < newRows.length; i++) {
-    const r = startRow + i;
-    formulas.push([
-      '=IMAGE("https://api.qrserver.com/v1/create-qr-code/?size=' +
-      BARCODE_QR_SIZE + 'x' + BARCODE_QR_SIZE +
-      '&data="&ENCODEURL(D' + r + '))'
-    ]);
-  }
-  bs.getRange(startRow, 5, newRows.length, 1).setFormulas(formulas);
+  // ラベル行
+  const labelRange = bs.getRange(labelRow, 1, 1, CARD_COLS);
+  labelRange.setValues([labels])
+    .setHorizontalAlignment('center')
+    .setVerticalAlignment('middle')
+    .setFontSize(11)
+    .setFontWeight('bold')
+    .setBackground('#ffffff');
 
-  // 行高をQRに合わせる
-  bs.setRowHeights(startRow, newRows.length, BARCODE_ROW_HEIGHT);
+  // 空白行(切り取り余白)
+  bs.getRange(gapRow, 1, 1, CARD_COLS).setBackground('#ffffff').setValues([['','','','','','']]);
 
-  return { added: newRows.length, colors: colors };
+  // 行高
+  bs.setRowHeight(qrRow, ROW_QR_HEIGHT);
+  bs.setRowHeight(colorRow, ROW_COLOR_HEIGHT);
+  bs.setRowHeight(labelRow, ROW_LABEL_HEIGHT);
+  bs.setRowHeight(gapRow, ROW_GAP_HEIGHT);
 }
 
 /**
- * 既存のバーコード作成シートのE列(QR数式)を最新仕様で書き直す。
- * 旧 chart.googleapis.com → api.qrserver.com に切替するなど、
- * 数式URLを一括更新したい時に使用。
- *
- * 実行方法: Apps Scriptエディタで関数 fixBarcodeQrFormulas を選択して▶実行
- */
-function fixBarcodeQrFormulas() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const bs = ss.getSheetByName(SHEET_BARCODE_GEN);
-  if (!bs) {
-    SpreadsheetApp.getUi().alert('バーコード作成シートが見つかりません');
-    return;
-  }
-  const lastRow = bs.getLastRow();
-  if (lastRow < 2) {
-    SpreadsheetApp.getUi().alert('バーコード行がありません');
-    return;
-  }
-  const formulas = [];
-  for (let r = 2; r <= lastRow; r++) {
-    formulas.push([
-      '=IMAGE("https://api.qrserver.com/v1/create-qr-code/?size=' +
-      BARCODE_QR_SIZE + 'x' + BARCODE_QR_SIZE +
-      '&data="&ENCODEURL(D' + r + '))'
-    ]);
-  }
-  bs.getRange(2, 5, formulas.length, 1).setFormulas(formulas);
-  bs.setRowHeights(2, formulas.length, BARCODE_ROW_HEIGHT);
-  SpreadsheetApp.getUi().alert('QR数式を更新: ' + formulas.length + '行');
-}
-
-/**
- * 手動再生成: 前処理シートのB列にある全地点について
- * バーコードが未生成のものを補完する。
+ * 手動再生成: バーコード作成シートを一旦クリアし、
+ * 前処理シートのB列にある全地点について再生成。
  *
  * 実行方法: Apps Scriptエディタで関数 regenerateAllBarcodes を選択して▶実行
  */
@@ -569,26 +600,34 @@ function regenerateAllBarcodes() {
     SpreadsheetApp.getUi().alert('前処理シートにデータがありません');
     return;
   }
-  const bs = zen.getRange(2, COL_ZENSHORI.POINT, lastRow - 1, 1).getValues();
+
+  const bs = ensureBarcodeSheet(ss);
+  // 既存ブロック領域をクリア (ヘッダー行は残す)
+  const bsLast = bs.getLastRow();
+  if (bsLast >= 2) {
+    bs.getRange(2, 1, bsLast - 1, CARD_COLS).clear();
+  }
+
+  // 全地点を出現順で抽出 (重複除去)
+  const bc = zen.getRange(2, COL_ZENSHORI.POINT, lastRow - 1, 1).getValues();
   const points = [];
-  bs.forEach(r => {
+  bc.forEach(r => {
     const p = String(r[0]).trim();
     if (p && points.indexOf(p) < 0) points.push(p);
   });
 
-  let totalAdded = 0;
+  let blockCount = 0;
   let skipped = 0;
   points.forEach(p => {
     const r = generateBarcodesForPoint(ss, p);
-    if (r.added) totalAdded += r.added;
-    else skipped++;
+    if (r.added) blockCount++; else skipped++;
   });
 
   SpreadsheetApp.getUi().alert(
     'バーコード再生成完了\n' +
     '・処理対象地点: ' + points.length + '件\n' +
-    '・追加行数: ' + totalAdded + '\n' +
-    '・スキップ(既存/色情報なし): ' + skipped
+    '・生成ブロック: ' + blockCount + '件\n' +
+    '・スキップ(色情報なし): ' + skipped
   );
 }
 
@@ -740,7 +779,7 @@ function migrateKoteiToV3() {
 
 // ========== 日報シート (LABO1: 受入/風乾/振り/ろか) ==========
 const DAILY_REPORT_MODES = ['受入', '風乾', '振り', 'ろか'];
-const DAILY_REPORT_HEADER = ['地点', '上下/RBK', '工程', '時刻', '担当者'];
+const DAILY_REPORT_HEADER = ['地点', '上下/RBK', '工程', '日時', '担当者'];
 
 /**
  * 当日の日報シートに1行追記。シートが無ければ作成しヘッダーも書き込む。
@@ -756,7 +795,7 @@ function logToDailyReport(ss, mode, point, udOrColor, worker, time) {
     sheet.getRange(1, 1, 1, DAILY_REPORT_HEADER.length).setFontWeight('bold');
     sheet.setColumnWidths(1, 5, 100);
   }
-  const timeStr = Utilities.formatDate(time || new Date(), 'Asia/Tokyo', 'HH:mm');
+  const timeStr = Utilities.formatDate(time || new Date(), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm');
   sheet.appendRow([point, udOrColor, mode, timeStr, worker]);
 }
 
