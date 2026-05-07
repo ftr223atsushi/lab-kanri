@@ -303,7 +303,7 @@
       <input type="text" id="scanInput" placeholder="ここにスキャン..." autocomplete="off" inputmode="text" autofocus>
       <button id="manualSendBtn" type="button">送信</button>
     </div>
-    <div class="hint">USBリーダー読み取り後 約0.4秒で自動送信 / Enter / 送信ボタン</div>
+    <div class="hint">USBリーダー: 自動送信 / 手入力: Enter または「送信」ボタン</div>
   </div>
 
   <div id="result" class="result idle">
@@ -434,10 +434,13 @@
       .trim();
   }
 
-  // 入力中の suffix を見て対応モードをハイライト(参考表示)
-  // + 自動送信デバウンサ(USBリーダーがEnter送らない場合の救済)
+  // 入力タイミング追跡: USBリーダー(高速) vs 手入力(低速) を判別
   let autoSubmitTimer = null;
-  const AUTO_SUBMIT_MS = 400; // 入力停止後この時間で自動送信
+  let inputTimestamps = [];        // 直近の入力時刻
+  const SCANNER_INTERVAL_MS = 50;  // この間隔以下なら「スキャナ入力」と判定
+  const SCANNER_IDLE_MS = 200;     // スキャナ入力後、この時間無入力で自動送信
+  const TIMESTAMPS_KEEP = 5;       // 直近 N 個だけ保持
+
   scanInput.addEventListener('input', () => {
     // 全角混入を即座に半角化(IMEが日本語固定でも数字・英字・ハイフンは即変換)
     const before = scanInput.value;
@@ -458,13 +461,27 @@
       if (target && !target.classList.contains('active')) target.classList.add('auto-hint');
     }
 
-    // 自動送信タイマー: 入力が止まってから AUTO_SUBMIT_MS 経過で送信
+    // 入力速度を見てスキャナ判定
+    const now = Date.now();
+    inputTimestamps.push(now);
+    if (inputTimestamps.length > TIMESTAMPS_KEEP) inputTimestamps.shift();
+
+    // 直近の入力間隔をすべて計算
+    let allFast = inputTimestamps.length >= 2;
+    for (let i = 1; i < inputTimestamps.length && allFast; i++) {
+      if (inputTimestamps[i] - inputTimestamps[i - 1] > SCANNER_INTERVAL_MS) {
+        allFast = false;
+      }
+    }
+
+    // 自動送信は「スキャナ入力」かつ「3文字以上」の場合のみ。
+    // 手入力(間隔が遅い)では自動送信せず、Enter または 送信ボタン待ち。
     if (autoSubmitTimer) clearTimeout(autoSubmitTimer);
-    if (v.length >= 3) {
+    if (allFast && v.length >= 3) {
       autoSubmitTimer = setTimeout(() => {
         autoSubmitTimer = null;
         if (scanInput.value.trim().length >= 3) submitFromInput();
-      }, AUTO_SUBMIT_MS);
+      }, SCANNER_IDLE_MS);
     }
   });
 
@@ -494,7 +511,9 @@
   // 統一送信処理: Enter / 送信ボタン / 自動送信デバウンス から呼ばれる
   function submitFromInput() {
     if (autoSubmitTimer) { clearTimeout(autoSubmitTimer); autoSubmitTimer = null; }
+    inputTimestamps = []; // 入力履歴もクリア(次の入力を新規スキャンとして判定)
     const code = normalizeCode(scanInput.value);
+    scanInput.value = ''; // 送信前に即クリア(次の入力が混入しないように)
     if (!code) return;
     try {
       if (batchMode) {
@@ -506,7 +525,6 @@
       console.error('scan handler error:', err);
       setResult('error', '内部エラー: ' + err.message);
     }
-    scanInput.value = '';
   }
 
   // スキャンエリアをタップで明示的にフォーカス(タブレットのキーボード表示用)
