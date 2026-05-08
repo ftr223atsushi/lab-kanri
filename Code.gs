@@ -140,13 +140,14 @@ const PROP_WORKERS         = 'lab_workers';
 const PROP_CURRENT_WORKER  = 'lab_current_worker';
 
 // ========== Web App エントリ ==========
-// アイコン (試験管+バーコード, ティール) を data URL で埋込
-const FAVICON_DATA_URL = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9Ijk2IiBmaWxsPSIjMGQ5NDg4Ii8+PGRlZnM+PGNsaXBQYXRoIGlkPSJ0Ij48cGF0aCBkPSJNIDE5MCAxMTAgTCAxOTAgMzYwIEEgNjYgNjYgMCAwIDAgMzIyIDM2MCBMIDMyMiAxMTAgWiIvPjwvY2xpcFBhdGg+PC9kZWZzPjxyZWN0IHg9IjE4MCIgeT0iMjMwIiB3aWR0aD0iMTYwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iI2ZmZiIgY2xpcC1wYXRoPSJ1cmwoI3QpIi8+PGcgZmlsbD0iIzBkOTQ4OCIgY2xpcC1wYXRoPSJ1cmwoI3QpIj48cmVjdCB4PSIyMDIiIHk9IjI1MCIgd2lkdGg9IjEyIiBoZWlnaHQ9IjE4MCIvPjxyZWN0IHg9IjIyMiIgeT0iMjUwIiB3aWR0aD0iNiIgaGVpZ2h0PSIxODAiLz48cmVjdCB4PSIyMzYiIHk9IjI1MCIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE4MCIvPjxyZWN0IHg9IjI2MCIgeT0iMjUwIiB3aWR0aD0iOCIgaGVpZ2h0PSIxODAiLz48cmVjdCB4PSIyNzYiIHk9IjI1MCIgd2lkdGg9IjE0IiBoZWlnaHQ9IjE4MCIvPjxyZWN0IHg9IjI5OCIgeT0iMjUwIiB3aWR0aD0iNiIgaGVpZ2h0PSIxODAiLz48cmVjdCB4PSIzMTIiIHk9IjI1MCIgd2lkdGg9IjEwIiBoZWlnaHQ9IjE4MCIvPjwvZz48cGF0aCBkPSJNIDE5MCAxMTAgTCAxOTAgMzYwIEEgNjYgNjYgMCAwIDAgMzIyIDM2MCBMIDMyMiAxMTAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxOCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjxyZWN0IHg9IjE2OCIgeT0iODQiIHdpZHRoPSIxNzYiIGhlaWdodD0iMzgiIHJ4PSIxMCIgZmlsbD0iI2ZmZiIvPjwvc3ZnPg==';
+// アイコン: GASは公開URLしか受け付けない (data URL不可)
+// → 公開ホスティング先のURLをここに設定する
+const FAVICON_URL = 'https://raw.githubusercontent.com/ftr223atsushi/lab-kanri/main/icon-192.png';
 
 function doGet() {
   return HtmlService.createHtmlOutputFromFile('Index')
     .setTitle('shast LAB 入力')
-    .setFaviconUrl(FAVICON_DATA_URL)
+    .setFaviconUrl(FAVICON_URL)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1.0')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
