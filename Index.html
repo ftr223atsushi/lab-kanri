@@ -762,10 +762,19 @@
   });
 
   // フォーカス自動維持
-  function focusInput() { scanInput.focus(); scanInput.select(); }
+  // モーダル表示中はスキャン入力欄にフォーカスを奪わない (現場切替/パスワード変更/確認ダイアログ)
+  function isAnyModalOpen() {
+    return document.getElementById('confirmMask').classList.contains('show')
+        || document.getElementById('siteSwitchMask').classList.contains('show')
+        || document.getElementById('pwdChangeMask').classList.contains('show');
+  }
+  function focusInput() {
+    if (isAnyModalOpen()) return;
+    scanInput.focus();
+    scanInput.select();
+  }
   setInterval(() => {
-    if (document.activeElement !== scanInput &&
-        !document.getElementById('confirmMask').classList.contains('show')) {
+    if (document.activeElement !== scanInput && !isAnyModalOpen()) {
       focusInput();
     }
   }, 500);
@@ -932,6 +941,8 @@
   document.querySelector('.scan-area').addEventListener('click', (e) => {
     // 送信ボタンクリックはそのまま透過
     if (e.target && e.target.id === 'manualSendBtn') return;
+    // モーダル表示中は何もしない (スキャン入力欄にフォーカスを奪わない)
+    if (isAnyModalOpen()) return;
     focusInput();
   });
 
