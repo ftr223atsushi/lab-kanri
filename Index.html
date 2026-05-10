@@ -314,10 +314,114 @@
   }
   .modal-buttons .ok     { background: #ef6c00; color: #fff; }
   .modal-buttons .cancel { background: #ccc;    color: #333; }
+
+  /* 現場バー (画面最上部、常時表示) */
+  .site-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    margin-bottom: 10px;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    border-left: 6px solid #0d9488;
+  }
+  .site-bar.unset { border-left-color: #c62828; background: #ffebee; }
+  .site-label { font-size: 11px; color: #666; }
+  .site-name {
+    flex: 1;
+    font-size: 14px;
+    font-weight: bold;
+    color: #0d9488;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .site-bar.unset .site-name { color: #c62828; }
+  .site-switch-btn {
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: bold;
+    border: 2px solid #00695c;
+    border-radius: 6px;
+    background: #009688;
+    color: #fff;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .site-switch-btn:hover { background: #00897b; }
+  .site-pwd-btn {
+    padding: 8px 10px;
+    font-size: 12px;
+    border: 1px solid #888;
+    border-radius: 6px;
+    background: #f5f5f5;
+    color: #555;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* 現場切替モーダル (確認ダイアログより広め) */
+  .modal.site-modal { max-width: 460px; }
+  .modal.site-modal h3 { color: #00695c; }
+  .modal label {
+    display: block;
+    font-size: 12px;
+    color: #555;
+    margin-top: 12px;
+    margin-bottom: 4px;
+    font-weight: bold;
+  }
+  .modal input[type="text"],
+  .modal input[type="password"] {
+    width: 100%;
+    padding: 10px;
+    font-size: 14px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    -webkit-appearance: none;
+  }
+  .modal input.pwd-4digit {
+    text-align: center;
+    letter-spacing: 0.6em;
+    font-size: 20px;
+    font-weight: bold;
+  }
+  .modal-buttons .save { background: #009688; color: #fff; }
+  .modal-error {
+    color: #c62828;
+    font-size: 13px;
+    margin: 8px 0 0 0;
+    min-height: 18px;
+  }
+  .modal-info {
+    color: #00695c;
+    font-size: 12px;
+    margin: 6px 0 0 0;
+  }
+
+  /* 未設定時のオーバーレイ (操作禁止) */
+  .disabled-overlay {
+    position: relative;
+    pointer-events: none;
+    opacity: 0.4;
+  }
 </style>
 </head>
 <body>
   <h1>shast LAB 入力</h1>
+
+  <!-- 現場バー (常時最上部に表示) -->
+  <div id="siteBar" class="site-bar unset">
+    <span class="site-label">現場:</span>
+    <span id="siteName" class="site-name">未設定</span>
+    <button id="sitePwdBtn" class="site-pwd-btn" title="パスワード変更">🔒</button>
+    <button id="siteSwitchBtn" class="site-switch-btn">現場切替</button>
+  </div>
+
+  <!-- 操作禁止対象を包むラッパ (未設定時はクラス追加で操作不可化) -->
+  <div id="appBody">
 
   <div class="section-label">担当者</div>
   <div class="workers-row">
@@ -383,7 +487,95 @@
     </div>
   </div>
 
+  </div><!-- /#appBody -->
+
+  <!-- 現場切替モーダル -->
+  <div id="siteSwitchMask" class="modal-mask">
+    <div class="modal site-modal">
+      <h3>現場切替</h3>
+      <p style="font-size:13px;color:#666;margin:0 0 4px 0;">スプレッドシートのURL（または ID）と4桁パスワードを入力してください。</p>
+      <label for="siteUrlInput">スプレッドシートURL or ID</label>
+      <input type="text" id="siteUrlInput" placeholder="https://docs.google.com/spreadsheets/d/..." autocomplete="off">
+      <label for="sitePwdInput">パスワード（4桁）</label>
+      <input type="password" id="sitePwdInput" class="pwd-4digit" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off">
+      <p id="siteModalError" class="modal-error"></p>
+      <div class="modal-buttons">
+        <button class="cancel" id="siteSwitchCancel">キャンセル</button>
+        <button class="save"   id="siteSwitchSave">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- パスワード変更モーダル -->
+  <div id="pwdChangeMask" class="modal-mask">
+    <div class="modal site-modal">
+      <h3>パスワード変更</h3>
+      <p style="font-size:13px;color:#666;margin:0 0 4px 0;">現在のパスワードと新しい4桁パスワードを入力してください。</p>
+      <label for="pwdOldInput">現在のパスワード</label>
+      <input type="password" id="pwdOldInput" class="pwd-4digit" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off">
+      <label for="pwdNewInput">新しいパスワード（4桁）</label>
+      <input type="password" id="pwdNewInput" class="pwd-4digit" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="off">
+      <p id="pwdModalError" class="modal-error"></p>
+      <div class="modal-buttons">
+        <button class="cancel" id="pwdChangeCancel">キャンセル</button>
+        <button class="save"   id="pwdChangeSave">変更</button>
+      </div>
+    </div>
+  </div>
+
 <script>
+  // ====== 現場（スプレッドシート）管理 ======
+  // 端末ごとにlocalStorageに保存。各端末で別現場を扱える。
+  const LS_SS_ID   = 'lab_kanri_spreadsheet_id';
+  const LS_SS_NAME = 'lab_kanri_spreadsheet_name';
+  const LS_SS_URL  = 'lab_kanri_spreadsheet_url';
+
+  function getCurrentSpreadsheetId() {
+    return localStorage.getItem(LS_SS_ID) || '';
+  }
+  function getCurrentSpreadsheetName() {
+    return localStorage.getItem(LS_SS_NAME) || '';
+  }
+  function setCurrentSpreadsheet(id, name, url) {
+    if (id) localStorage.setItem(LS_SS_ID, id);
+    if (name) localStorage.setItem(LS_SS_NAME, name);
+    if (url) localStorage.setItem(LS_SS_URL, url);
+    refreshSiteBar();
+  }
+  function clearCurrentSpreadsheet() {
+    localStorage.removeItem(LS_SS_ID);
+    localStorage.removeItem(LS_SS_NAME);
+    localStorage.removeItem(LS_SS_URL);
+    refreshSiteBar();
+  }
+
+  function refreshSiteBar() {
+    const id = getCurrentSpreadsheetId();
+    const name = getCurrentSpreadsheetName();
+    const bar = document.getElementById('siteBar');
+    const nameEl = document.getElementById('siteName');
+    const appBody = document.getElementById('appBody');
+    if (id) {
+      bar.classList.remove('unset');
+      nameEl.textContent = name || '(名前不明)';
+      appBody.classList.remove('disabled-overlay');
+    } else {
+      bar.classList.add('unset');
+      nameEl.textContent = '未設定 → 「現場切替」を押してください';
+      appBody.classList.add('disabled-overlay');
+    }
+  }
+
+  // 現場が必須な操作の前にチェック。未設定なら切替モーダルを開く。
+  function requireSpreadsheet() {
+    const id = getCurrentSpreadsheetId();
+    if (!id) {
+      openSiteSwitchModal();
+      return false;
+    }
+    return true;
+  }
+
   let currentMode = null;
   let currentWorker = '';
   const history = [];
@@ -744,20 +936,22 @@
   });
 
   function submitScan(mode, code, force) {
+    if (!requireSpreadsheet()) return;
     setResult('idle', '送信中... ' + code);
     google.script.run
       .withSuccessHandler(onScanResult)
       .withFailureHandler(onScanError)
-      .handleScan(mode, code, !!force);
+      .handleScan(getCurrentSpreadsheetId(), mode, code, !!force);
   }
 
   // ろかモード2段スキャン用：1個目（ろか）を取得した時点の担当者で記録する
   function submitScanWithWorker(mode, code, force, overrideWorker) {
+    if (!requireSpreadsheet()) return;
     setResult('idle', '送信中... ' + code);
     google.script.run
       .withSuccessHandler(onScanResult)
       .withFailureHandler(onScanError)
-      .handleScan(mode, code, !!force, overrideWorker || '');
+      .handleScan(getCurrentSpreadsheetId(), mode, code, !!force, overrideWorker || '');
   }
 
   function onScanResult(res) {
@@ -1077,10 +1271,14 @@
 
   function runScanPromise(mode, code, force) {
     return new Promise(resolve => {
+      if (!getCurrentSpreadsheetId()) {
+        resolve({ ok: false, message: '現場が未設定です。「現場切替」から設定してください' });
+        return;
+      }
       google.script.run
         .withSuccessHandler(resolve)
         .withFailureHandler(e => resolve({ ok: false, message: '通信エラー: ' + e.message }))
-        .handleScan(mode, code, !!force);
+        .handleScan(getCurrentSpreadsheetId(), mode, code, !!force);
     });
   }
 
@@ -1110,6 +1308,7 @@
   document.getElementById('printDailyBtn').addEventListener('click', printDailyReport);
 
   function printDailyReport() {
+    if (!requireSpreadsheet()) return;
     const btn = document.getElementById('printDailyBtn');
     btn.disabled = true;
     const original = btn.textContent;
@@ -1146,7 +1345,7 @@
         alert('通信エラー: ' + e.message);
         focusInput();
       })
-      .getDailyReportData();
+      .getDailyReportData(getCurrentSpreadsheetId());
   }
 
   function renderPrintTab(w, data) {
@@ -1220,10 +1419,11 @@
         setResult('error', '印刷済みマーク通信エラー: ' + e.message);
         focusInput();
       })
-      .markBarcodePrinted(points);
+      .markBarcodePrinted(getCurrentSpreadsheetId(), points);
   });
 
   function printBarcodeSheet() {
+    if (!requireSpreadsheet()) return;
     const btn = document.getElementById('printBarcodeBtn');
     btn.disabled = true;
     const original = btn.textContent;
@@ -1259,7 +1459,7 @@
         alert('通信エラー: ' + e.message);
         focusInput();
       })
-      .getBarcodePrintData();
+      .getBarcodePrintData(getCurrentSpreadsheetId());
   }
 
   function renderBarcodePrintTab(w, data) {
@@ -1413,8 +1613,130 @@
     };
   }
 
+  // ====== 現場切替モーダル ======
+  const siteSwitchMask  = document.getElementById('siteSwitchMask');
+  const siteUrlInput    = document.getElementById('siteUrlInput');
+  const sitePwdInput    = document.getElementById('sitePwdInput');
+  const siteModalError  = document.getElementById('siteModalError');
+
+  function openSiteSwitchModal() {
+    siteUrlInput.value = localStorage.getItem(LS_SS_URL) || '';
+    sitePwdInput.value = '';
+    siteModalError.textContent = '';
+    siteSwitchMask.classList.add('show');
+    setTimeout(function() { sitePwdInput.focus(); }, 50);
+  }
+  function closeSiteSwitchModal() {
+    siteSwitchMask.classList.remove('show');
+  }
+
+  document.getElementById('siteSwitchBtn').addEventListener('click', openSiteSwitchModal);
+  document.getElementById('siteSwitchCancel').addEventListener('click', closeSiteSwitchModal);
+
+  document.getElementById('siteSwitchSave').addEventListener('click', function() {
+    const url = siteUrlInput.value.trim();
+    const pwd = sitePwdInput.value.trim();
+    siteModalError.textContent = '';
+    if (!url) { siteModalError.textContent = 'スプレッドシートURLを入力してください'; return; }
+    if (!/^\d{4}$/.test(pwd)) { siteModalError.textContent = 'パスワードは4桁の数字です'; return; }
+
+    const saveBtn = document.getElementById('siteSwitchSave');
+    saveBtn.disabled = true;
+    saveBtn.textContent = '確認中...';
+
+    // パスワード検証 → スプレッドシートを開けるか確認 → localStorage保存
+    google.script.run
+      .withSuccessHandler(function(res) {
+        if (!res.ok) {
+          siteModalError.textContent = res.message || 'パスワードが違います';
+          saveBtn.disabled = false;
+          saveBtn.textContent = '保存';
+          return;
+        }
+        // パスワード OK → スプレッドシート確認
+        google.script.run
+          .withSuccessHandler(function(meta) {
+            saveBtn.disabled = false;
+            saveBtn.textContent = '保存';
+            if (!meta.ok) {
+              siteModalError.textContent = meta.message || 'スプレッドシートを開けません';
+              return;
+            }
+            setCurrentSpreadsheet(meta.id, meta.name, meta.url);
+            closeSiteSwitchModal();
+            setResult('ok', '現場を切り替えました: ' + meta.name);
+            // 担当者一覧を再読込
+            loadWorkers();
+            focusInput();
+          })
+          .withFailureHandler(function(e) {
+            saveBtn.disabled = false;
+            saveBtn.textContent = '保存';
+            siteModalError.textContent = '通信エラー: ' + e.message;
+          })
+          .getSpreadsheetMeta(url);
+      })
+      .withFailureHandler(function(e) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '保存';
+        siteModalError.textContent = '通信エラー: ' + e.message;
+      })
+      .verifyPassword(pwd);
+  });
+
+  // ====== パスワード変更モーダル ======
+  const pwdChangeMask = document.getElementById('pwdChangeMask');
+  const pwdOldInput   = document.getElementById('pwdOldInput');
+  const pwdNewInput   = document.getElementById('pwdNewInput');
+  const pwdModalError = document.getElementById('pwdModalError');
+
+  document.getElementById('sitePwdBtn').addEventListener('click', function() {
+    pwdOldInput.value = '';
+    pwdNewInput.value = '';
+    pwdModalError.textContent = '';
+    pwdChangeMask.classList.add('show');
+    setTimeout(function() { pwdOldInput.focus(); }, 50);
+  });
+  document.getElementById('pwdChangeCancel').addEventListener('click', function() {
+    pwdChangeMask.classList.remove('show');
+  });
+  document.getElementById('pwdChangeSave').addEventListener('click', function() {
+    const oldP = pwdOldInput.value.trim();
+    const newP = pwdNewInput.value.trim();
+    pwdModalError.textContent = '';
+    if (!/^\d{4}$/.test(oldP)) { pwdModalError.textContent = '現在のパスワードは4桁の数字です'; return; }
+    if (!/^\d{4}$/.test(newP)) { pwdModalError.textContent = '新パスワードは4桁の数字で入力してください'; return; }
+
+    const saveBtn = document.getElementById('pwdChangeSave');
+    saveBtn.disabled = true;
+    saveBtn.textContent = '変更中...';
+    google.script.run
+      .withSuccessHandler(function(res) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '変更';
+        if (!res.ok) {
+          pwdModalError.textContent = res.message || '変更失敗';
+          return;
+        }
+        pwdChangeMask.classList.remove('show');
+        setResult('ok', 'パスワードを変更しました');
+      })
+      .withFailureHandler(function(e) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '変更';
+        pwdModalError.textContent = '通信エラー: ' + e.message;
+      })
+      .changePassword(oldP, newP);
+  });
+
   // 初期化
-  loadWorkers();
+  refreshSiteBar();
+  if (getCurrentSpreadsheetId()) {
+    loadWorkers();
+  } else {
+    // 現場未設定 → 起動時に切替モーダルを開く
+    setTimeout(openSiteSwitchModal, 200);
+  }
   setTimeout(focusInput, 100);
 </script>
 </body>
