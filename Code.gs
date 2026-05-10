@@ -154,7 +154,7 @@ const PASSWORD_SALT      = 'shast-lab-v5-salt';
 // ========== Web App エントリ ==========
 // アイコン: GASは公開URLしか受け付けない (data URL不可)
 // → 公開ホスティング先のURLをここに設定する
-const FAVICON_URL = 'https://raw.githubusercontent.com/ftr223atsushi/lab-kanri/main/icon-192.png';
+const FAVICON_URL = 'https://raw.githubusercontent.com/ftr223atsushi/lab-kanri/main/icon.svg';
 
 function doGet() {
   return HtmlService.createHtmlOutputFromFile('Index')
