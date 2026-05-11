@@ -407,6 +407,64 @@
     pointer-events: none;
     opacity: 0.4;
   }
+
+  /* 共有フォルダ「現場一覧」UI */
+  .folder-pick-btn {
+    width: 100%;
+    padding: 12px;
+    margin-top: 4px;
+    font-size: 14px;
+    font-weight: bold;
+    border: 2px dashed #00897b;
+    border-radius: 8px;
+    background: #e0f2f1;
+    color: #00695c;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .folder-pick-btn:hover { background: #b2dfdb; }
+  .folder-pick-btn:disabled { opacity: 0.6; cursor: wait; }
+
+  .folder-list {
+    margin-top: 8px;
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    background: #fafafa;
+  }
+  .folder-list-item {
+    padding: 10px 12px;
+    border-bottom: 1px solid #eee;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .folder-list-item:last-child { border-bottom: none; }
+  .folder-list-item:hover { background: #e0f2f1; }
+  .folder-list-item.selected { background: #b2dfdb; }
+  .folder-list-item .name { font-size: 14px; font-weight: bold; color: #333; }
+  .folder-list-item .meta { font-size: 11px; color: #888; }
+  .folder-list-empty { padding: 14px; text-align: center; color: #999; font-size: 12px; }
+
+  .modal-divider {
+    display: flex;
+    align-items: center;
+    margin: 14px 0 4px 0;
+    color: #999;
+    font-size: 11px;
+  }
+  .modal-divider::before,
+  .modal-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #ddd;
+  }
+  .modal-divider::before { margin-right: 8px; }
+  .modal-divider::after  { margin-left: 8px; }
 </style>
 </head>
 <body>
@@ -493,7 +551,13 @@
   <div id="siteSwitchMask" class="modal-mask">
     <div class="modal site-modal">
       <h3>現場切替</h3>
-      <p style="font-size:13px;color:#666;margin:0 0 4px 0;">スプレッドシートのURL（または ID）と4桁パスワードを入力してください。</p>
+      <p style="font-size:13px;color:#666;margin:0 0 4px 0;">共有フォルダから現場を選ぶか、URLを直接入力してください。</p>
+
+      <button id="folderPickBtn" class="folder-pick-btn">📁 共有フォルダから選ぶ</button>
+      <div id="folderList" class="folder-list" style="display:none;"></div>
+
+      <div class="modal-divider">または</div>
+
       <label for="siteUrlInput">スプレッドシートURL or ID</label>
       <input type="text" id="siteUrlInput" placeholder="https://docs.google.com/spreadsheets/d/..." autocomplete="off">
       <label for="sitePwdInput">パスワード（4桁）</label>
@@ -1634,6 +1698,8 @@
     siteUrlInput.value = localStorage.getItem(LS_SS_URL) || '';
     sitePwdInput.value = '';
     siteModalError.textContent = '';
+    // フォルダ一覧は閉じた状態でスタート
+    document.getElementById('folderList').style.display = 'none';
     siteSwitchMask.classList.add('show');
     setTimeout(function() { sitePwdInput.focus(); }, 50);
   }
@@ -1643,6 +1709,67 @@
 
   document.getElementById('siteSwitchBtn').addEventListener('click', openSiteSwitchModal);
   document.getElementById('siteSwitchCancel').addEventListener('click', closeSiteSwitchModal);
+
+  // ====== 共有フォルダから現場を選ぶ ======
+  const folderPickBtn = document.getElementById('folderPickBtn');
+  const folderListEl  = document.getElementById('folderList');
+
+  folderPickBtn.addEventListener('click', function() {
+    folderPickBtn.disabled = true;
+    const originalText = folderPickBtn.textContent;
+    folderPickBtn.textContent = '読み込み中...';
+    folderListEl.style.display = 'block';
+    folderListEl.innerHTML = '<div class="folder-list-empty">読み込み中...</div>';
+
+    google.script.run
+      .withSuccessHandler(function(res) {
+        folderPickBtn.disabled = false;
+        folderPickBtn.textContent = originalText;
+        if (!res.ok) {
+          folderListEl.innerHTML = '<div class="folder-list-empty">' + escapeHtml(res.message) + '</div>';
+          return;
+        }
+        renderFolderList(res.files || []);
+      })
+      .withFailureHandler(function(e) {
+        folderPickBtn.disabled = false;
+        folderPickBtn.textContent = originalText;
+        folderListEl.innerHTML = '<div class="folder-list-empty">通信エラー: ' + escapeHtml(e.message) + '</div>';
+      })
+      .listSpreadsheetsInSharedFolder();
+  });
+
+  function renderFolderList(files) {
+    if (!files.length) {
+      folderListEl.innerHTML = '<div class="folder-list-empty">共有フォルダにスプレッドシートがありません</div>';
+      return;
+    }
+    folderListEl.innerHTML = '';
+    files.forEach(function(f) {
+      const d = new Date(f.lastUpdated);
+      const dStr = d.getFullYear() + '/' +
+        ('0' + (d.getMonth() + 1)).slice(-2) + '/' +
+        ('0' + d.getDate()).slice(-2) + ' ' +
+        ('0' + d.getHours()).slice(-2) + ':' +
+        ('0' + d.getMinutes()).slice(-2);
+      const item = document.createElement('div');
+      item.className = 'folder-list-item';
+      item.innerHTML =
+        '<div class="name">' + escapeHtml(f.name) + '</div>' +
+        '<div class="meta">最終更新: ' + dStr + '</div>';
+      item.addEventListener('click', function() {
+        // 選択ハイライト + URL欄に流し込み
+        folderListEl.querySelectorAll('.folder-list-item').forEach(function(el) {
+          el.classList.remove('selected');
+        });
+        item.classList.add('selected');
+        siteUrlInput.value = f.url;
+        // パスワード欄にフォーカス
+        setTimeout(function() { sitePwdInput.focus(); }, 50);
+      });
+      folderListEl.appendChild(item);
+    });
+  }
 
   document.getElementById('siteSwitchSave').addEventListener('click', function() {
     const url = siteUrlInput.value.trim();

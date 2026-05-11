@@ -151,6 +151,10 @@ const PROP_PASSWORD_HASH = 'lab_password_hash';
 const DEFAULT_PASSWORD   = '1111';
 const PASSWORD_SALT      = 'shast-lab-v5-salt';
 
+// 現場スプレッドシート共有フォルダ (shast-pickerが出力するフォルダ)
+// このフォルダ内のスプレッドシート一覧を「現場切替」モーダルで選択可能にする
+const SHARED_FOLDER_ID = '1V4zi1031hEseO3QP9iARHAhyuRDwgYaM';
+
 // ========== Web App エントリ ==========
 // アイコン: GASは公開URLしか受け付けない (data URL不可)
 // → 公開ホスティング先のURLをここに設定する
@@ -200,6 +204,32 @@ function getSpreadsheetMeta(spreadsheetId) {
     return { ok: true, id: ss.getId(), name: ss.getName(), url: ss.getUrl() };
   } catch (e) {
     return { ok: false, message: 'スプレッドシートを開けません: ' + e.message };
+  }
+}
+
+/**
+ * クライアントから呼ぶ: 共有フォルダ内のスプレッドシート一覧を返す。
+ * 現場切替モーダルの「📁 共有フォルダから選ぶ」ボタンから呼ばれる。
+ * 並び: 最終更新降順 (最新が一番上)
+ */
+function listSpreadsheetsInSharedFolder() {
+  try {
+    const folder = DriveApp.getFolderById(SHARED_FOLDER_ID);
+    const files = folder.getFilesByType(MimeType.GOOGLE_SHEETS);
+    const list = [];
+    while (files.hasNext()) {
+      const f = files.next();
+      list.push({
+        id: f.getId(),
+        name: f.getName(),
+        url: f.getUrl(),
+        lastUpdated: f.getLastUpdated().getTime()
+      });
+    }
+    list.sort(function(a, b) { return b.lastUpdated - a.lastUpdated; });
+    return { ok: true, folderName: folder.getName(), files: list };
+  } catch (e) {
+    return { ok: false, message: '共有フォルダを開けません: ' + e.message };
   }
 }
 
