@@ -32,10 +32,17 @@
  */
 
 // ========== シート名 ==========
-const SHEET_KOTEI       = '工程時刻';
+// v6: shast-picker新仕様 (地点抽出シート経由のコード解決、種別×シート分岐)
+const SHEET_CHITEN      = '地点抽出';
+const SHEET_HYOSO       = '表層土壌';
+const SHEET_HAIKAN      = '配管・ピット・盛土下';
+const SHEET_GAS         = '土壌ガス';        // v6時点では未対応 (UIに種別ボタン出さない)
 const SHEET_ZENSHORI    = '前処理';
 const SHEET_BUNSEKI     = '分析';
 const SHEET_BARCODE_GEN = 'バーコード作成';
+
+// v5以前互換用 (旧コード参照箇所のために残置、現行ロジックは使わない)
+const SHEET_KOTEI       = '工程時刻';
 
 // ========== バーコード生成定義 (印刷向けレイアウト) ==========
 // 1地点 = 6カード(R/B/K × ろか/振り) を横1行に並べる
@@ -66,17 +73,53 @@ const ROW_GAP_HEIGHT       = 8;
 const HEADER_ROW_HEIGHT    = 24;
 const BARCODE_PRINT_FLAG_COL = 7; // G列: 印刷フラグ用チェックボックス
 
-// ========== 列定義 ==========
+// ========== 種別×シート構成 (v6) ==========
+// 地点抽出シート:
+//   土壌ブロック  : A=地点名 B=上下 C=コード         (kind: 表層土壌)
+//   ガスブロック  : D=地点名 E=コード               (kind: 土壌ガス)
+//   配管ブロック  : F=地点 G=採取深度下端 H=コード   (kind: 配管・ピット・盛土下)
+//
+// 各種別の作業シート:
+//   表層土壌: A=地点 B=上下 C=採取 D=採取担当 E=受入 F=受入担当 G=風乾 H=風乾担当
+//   配管下  : A=地点      B=採取 C=採取担当 D=受入 E=受入担当 F=風乾 G=風乾担当 (上下なし)
+//
+// 種別名 → 設定
+const KIND_CONFIG = {
+  '表層土壌': {
+    pickupCodeCol:  3,   // 地点抽出 C列
+    pickupPointCol: 1,   // 地点抽出 A列
+    pickupUdCol:    2,   // 地点抽出 B列 (上下)
+    workSheet:      SHEET_HYOSO,
+    hasUd:          true,
+    workCols: {
+      POINT:    1, UD: 2,
+      SAISHU:   3, SAISHU_W: 4,   // C,D
+      UKEIRE:   5, UKEIRE_W: 6,   // E,F
+      FUKAN:    7, FUKAN_W:  8    // G,H
+    }
+  },
+  '配管・ピット・盛土下': {
+    pickupCodeCol:  8,   // 地点抽出 H列
+    pickupPointCol: 6,   // 地点抽出 F列
+    pickupUdCol:    null, // 上下なし
+    workSheet:      SHEET_HAIKAN,
+    hasUd:          false,
+    workCols: {
+      POINT:    1,
+      SAISHU:   2, SAISHU_W: 3,   // B,C
+      UKEIRE:   4, UKEIRE_W: 5,   // D,E
+      FUKAN:    6, FUKAN_W:  7    // F,G
+    }
+  }
+  // '土壌ガス': v6では未対応 (削孔工程が必要なため別途実装)
+};
+
+// v5以前の旧 列定義 (現行ロジックは使わない、旧 工程時刻 シート用)
 const COL_KOTEI = {
-  POINT:    1,  // A
-  UD:       2,  // B
-  CODE:     3,  // C
-  SAISHU:   4,  // D 採取時刻
-  SAISHU_W: 5,  // E 採取担当
-  UKEIRE:   6,  // F 受入時刻
-  UKEIRE_W: 7,  // G 受入担当
-  FUKAN:    8,  // H 風乾時刻
-  FUKAN_W:  9   // I 風乾担当
+  POINT:    1, UD: 2, CODE: 3,
+  SAISHU:   4, SAISHU_W: 5,
+  UKEIRE:   6, UKEIRE_W: 7,
+  FUKAN:    8, FUKAN_W:  9
 };
 
 const COL_ZENSHORI = {
@@ -192,6 +235,41 @@ function openSpreadsheet_(spreadsheetId) {
   const id = parseSpreadsheetIdFromInput(spreadsheetId);
   if (!id) throw new Error('スプレッドシートが設定されていません (現場切替から設定してください)');
   return SpreadsheetApp.openById(id);
+}
+
+/**
+ * 地点抽出シートでベースコードから地点情報を引く。
+ * @param {Spreadsheet} ss 開かれたスプレッドシート
+ * @param {string} kind 種別名 ('表層土壌' / '配管・ピット・盛土下')
+ * @param {string} baseCode スキャンされたベースコード
+ * @return {Object|null} { point, ud } または null (未発見)
+ */
+function resolveBaseCode_(ss, kind, baseCode) {
+  const cfg = KIND_CONFIG[kind];
+  if (!cfg) throw new Error('未対応の種別: ' + kind);
+
+  const sheet = ss.getSheetByName(SHEET_CHITEN);
+  if (!sheet) throw new Error('「' + SHEET_CHITEN + '」シートが見つかりません');
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return null;
+
+  // 必要な列幅 (コード列まで)
+  const lastCol = Math.max(cfg.pickupCodeCol, cfg.pickupPointCol, cfg.pickupUdCol || 0);
+  const range = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+
+  const target = String(baseCode).trim();
+  for (let i = 0; i < range.length; i++) {
+    const code = String(range[i][cfg.pickupCodeCol - 1]).trim();
+    if (code === target) {
+      const point = String(range[i][cfg.pickupPointCol - 1]).trim();
+      const ud    = cfg.pickupUdCol
+        ? String(range[i][cfg.pickupUdCol - 1]).trim()
+        : '';
+      return { point: point, ud: ud };
+    }
+  }
+  return null;
 }
 
 /**
@@ -330,12 +408,13 @@ function setCurrentWorker(name) {
 // ========== メイン: スキャン処理 ==========
 /**
  * @param {string} spreadsheetId - 対象スプレッドシートID (端末側localStorageから渡る)
- * @param {string} mode          - UI上の選択モード
+ * @param {string} kind          - 種別 ('表層土壌' / '配管・ピット・盛土下')
+ * @param {string} mode          - UI上の選択モード (採取/受入/風乾/振り/ろか/分析)
  * @param {string} code          - スキャンコード
  * @param {boolean} force        - 順番警告無視
  * @return {Object}
  */
-function handleScan(spreadsheetId, mode, code, force, overrideWorker) {
+function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker) {
   try {
     if (!code || !String(code).trim()) {
       return { ok: false, message: 'コードが空です' };
@@ -399,7 +478,11 @@ function handleScan(spreadsheetId, mode, code, force, overrideWorker) {
 
     // フェーズ別処理
     if (cfg.phase === 1) {
-      return handlePhase1(ss, effectiveMode, cfg, parsed.baseCode, worker, force, autoSwitched);
+      // phase1 は種別 (kind) が必須
+      if (!kind || !KIND_CONFIG[kind]) {
+        return { ok: false, message: '種別を選択してください (表層土壌 / 配管・ピット・盛土下)' };
+      }
+      return handlePhase1(ss, kind, effectiveMode, cfg, parsed.baseCode, worker, force, autoSwitched);
     } else {
       return handlePhase2or3(ss, effectiveMode, cfg, parsed, worker, force, autoSwitched);
     }
@@ -427,32 +510,59 @@ function parseCode(code) {
   return { type: 'base', baseCode: code };
 }
 
-// ========== フェーズ1: 工程時刻シート ==========
-function handlePhase1(ss, mode, cfg, baseCode, worker, force, autoSwitched) {
-  const sheet = ss.getSheetByName(SHEET_KOTEI);
-  if (!sheet) return { ok: false, message: '「' + SHEET_KOTEI + '」シートが見つかりません' };
+// ========== フェーズ1: 種別ごとの作業シート (v6) ==========
+// 1) 地点抽出シートでコード→地点(+上下)を解決
+// 2) 種別の作業シート (表層土壌 / 配管・ピット・盛土下) で地点(+上下)の行を探す
+// 3) 該当工程の時刻/担当列に書込み
+function handlePhase1(ss, kind, mode, cfg, baseCode, worker, force, autoSwitched) {
+  const kc = KIND_CONFIG[kind];
+  if (!kc) return { ok: false, message: '未対応の種別: ' + kind };
+
+  // (1) コード解決
+  const resolved = resolveBaseCode_(ss, kind, baseCode);
+  if (!resolved) {
+    return { ok: false, message: 'コード ' + baseCode + ' が ' + kind + ' に見つかりません (地点抽出シートを確認してください)' };
+  }
+  const point = resolved.point;
+  const ud    = resolved.ud;
+  if (!point) {
+    return { ok: false, message: 'コード ' + baseCode + ' の地点名が空です' };
+  }
+
+  // (2) 作業シートで地点(+上下)の行を検索
+  const sheet = ss.getSheetByName(kc.workSheet);
+  if (!sheet) return { ok: false, message: '「' + kc.workSheet + '」シートが見つかりません' };
 
   const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return { ok: false, message: '工程時刻シートにデータがありません' };
+  if (lastRow < 2) {
+    return { ok: false, message: '「' + kc.workSheet + '」シートにデータがありません (地点が展開されているか確認してください)' };
+  }
 
-  // C列でベースコード検索
-  const codes = sheet.getRange(2, COL_KOTEI.CODE, lastRow - 1, 1).getValues();
+  const numCols = kc.hasUd ? 2 : 1;
+  const data = sheet.getRange(2, kc.workCols.POINT, lastRow - 1, numCols).getValues();
   let foundRow = -1;
-  for (let i = 0; i < codes.length; i++) {
-    if (String(codes[i][0]).trim() === baseCode) {
-      foundRow = i + 2;
-      break;
+  for (let i = 0; i < data.length; i++) {
+    const p = String(data[i][0]).trim();
+    if (p !== String(point).trim()) continue;
+    if (kc.hasUd) {
+      const u = String(data[i][1]).trim();
+      // ud は 上/下/up/down を許容
+      if (udNormalize(u) === udNormalize(ud)) { foundRow = i + 2; break; }
+    } else {
+      foundRow = i + 2; break;
     }
   }
   if (foundRow < 0) {
-    return { ok: false, message: 'コード ' + baseCode + ' が見つかりません(採取記録なし)' };
+    const udDisp = kc.hasUd ? '(' + udDisplay(ud) + ')' : '';
+    return { ok: false, message: kc.workSheet + 'シートに ' + point + udDisp + ' の行が見つかりません' };
   }
 
-  const point = sheet.getRange(foundRow, COL_KOTEI.POINT).getValue();
-  const ud    = sheet.getRange(foundRow, COL_KOTEI.UD).getValue();
-
-  const targetCol  = COL_KOTEI[cfg.col];
-  const workerCol  = COL_KOTEI[cfg.workerCol];
+  // (3) 該当工程の時刻/担当列
+  const targetCol = kc.workCols[cfg.col];
+  const workerCol = kc.workCols[cfg.workerCol];
+  if (!targetCol || !workerCol) {
+    return { ok: false, message: kind + ' は ' + mode + ' モードに未対応です' };
+  }
   const targetCell = sheet.getRange(foundRow, targetCol);
 
   // 二重チェック
@@ -467,18 +577,21 @@ function handlePhase1(ss, mode, cfg, baseCode, worker, force, autoSwitched) {
 
   // 順番チェック
   if (cfg.prevCol) {
-    const prevVal = sheet.getRange(foundRow, COL_KOTEI[cfg.prevCol]).getValue();
-    if (!prevVal) {
-      const prevName = phase1ColName(cfg.prevCol);
-      if (cfg.strict) {
-        return { ok: false, message: prevName + ' が未記録です。先に ' + prevName + ' を記録してください' };
-      } else if (!force) {
-        return {
-          ok: false, needConfirm: true,
-          message: prevName + ' が完了していませんが ' + mode + ' を記録しますか？',
-          mode: mode, code: baseCode,
-          autoMode: autoSwitched ? mode : null
-        };
+    const prevCol = kc.workCols[cfg.prevCol];
+    if (prevCol) {
+      const prevVal = sheet.getRange(foundRow, prevCol).getValue();
+      if (!prevVal) {
+        const prevName = phase1ColName(cfg.prevCol);
+        if (cfg.strict) {
+          return { ok: false, message: prevName + ' が未記録です。先に ' + prevName + ' を記録してください' };
+        } else if (!force) {
+          return {
+            ok: false, needConfirm: true,
+            message: prevName + ' が完了していませんが ' + mode + ' を記録しますか？',
+            mode: mode, code: baseCode,
+            autoMode: autoSwitched ? mode : null
+          };
+        }
       }
     }
   }
@@ -491,27 +604,46 @@ function handlePhase1(ss, mode, cfg, baseCode, worker, force, autoSwitched) {
 
   // 日報シートに追記 (受入/風乾のみ)
   try {
-    logToDailyReport(ss, mode, point, udDisplay(ud), worker, now);
+    const udOrEmpty = kc.hasUd ? udDisplay(ud) : '';
+    logToDailyReport(ss, mode, point, udOrEmpty, worker, now);
   } catch (e) {}
 
-  // 風乾完了 → 上下揃いチェック → M列追加
+  // 風乾完了 → 上下揃いチェック → M列追加 (表層土壌のみ。配管下は上下なしのため別ロジック)
   let mergeNote = '';
   if (mode === '風乾') {
     try {
-      const merged = checkAndMergeIfReady(ss, point);
-      if (merged) mergeNote = ' / 上下揃い → M列追加: ' + point;
+      if (kind === '表層土壌') {
+        const merged = checkAndMergeIfReadyHyoso_(ss, point);
+        if (merged) mergeNote = ' / 上下揃い → M列追加: ' + point;
+      } else if (kind === '配管・ピット・盛土下') {
+        // 上下概念なし → 風乾完了の瞬間に即追加
+        const added = addToMaster(ss, SHEET_ZENSHORI, point);
+        if (added) {
+          addToMaster(ss, SHEET_BUNSEKI, point);
+          try { SpreadsheetApp.flush(); generateBarcodesForPoint(ss, point); } catch (e) {}
+          mergeNote = ' / M列追加: ' + point;
+        }
+      }
     } catch (e) {
       mergeNote = ' / M列追加失敗: ' + e.message;
     }
   }
 
+  const udDispMsg = kc.hasUd ? '(' + udDisplay(ud) + ')' : '';
   return {
     ok: true,
-    message: mode + ' 記録完了: ' + point + '(' + udDisplay(ud) + ') 担当:' + worker + mergeNote,
+    message: mode + ' 記録完了: ' + point + udDispMsg + ' 担当:' + worker + mergeNote,
     mode: mode, autoMode: autoSwitched ? mode : null,
     point: point, ud: ud, worker: worker,
     time: Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm:ss')
   };
+}
+
+function udNormalize(ud) {
+  const s = String(ud).toLowerCase().trim();
+  if (s === 'up' || s === '上') return 'up';
+  if (s === 'down' || s === '下') return 'down';
+  return s;
 }
 
 function phase1ColName(colKey) {
@@ -523,18 +655,21 @@ function phase1ColName(colKey) {
   }
 }
 
-// ========== 上下揃い → M列追加 ==========
-function checkAndMergeIfReady(ss, point) {
-  const sheet = ss.getSheetByName(SHEET_KOTEI);
+// ========== 上下揃い → M列追加 (表層土壌専用) ==========
+function checkAndMergeIfReadyHyoso_(ss, point) {
+  const kc = KIND_CONFIG['表層土壌'];
+  const sheet = ss.getSheetByName(kc.workSheet);
+  if (!sheet) return false;
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return false;
 
-  const data = sheet.getRange(2, 1, lastRow - 1, COL_KOTEI.FUKAN).getValues();
+  // 必要範囲: A(POINT) ～ FUKAN列まで
+  const data = sheet.getRange(2, 1, lastRow - 1, kc.workCols.FUKAN).getValues();
   let upDone = false, downDone = false;
   for (const row of data) {
-    if (String(row[COL_KOTEI.POINT - 1]).trim() === String(point).trim()) {
-      const ud = String(row[COL_KOTEI.UD - 1]).toLowerCase().trim();
-      const fukan = row[COL_KOTEI.FUKAN - 1];
+    if (String(row[kc.workCols.POINT - 1]).trim() === String(point).trim()) {
+      const ud = String(row[kc.workCols.UD - 1]).toLowerCase().trim();
+      const fukan = row[kc.workCols.FUKAN - 1];
       if (fukan) {
         if (ud === 'up' || ud === '上') upDone = true;
         if (ud === 'down' || ud === '下') downDone = true;

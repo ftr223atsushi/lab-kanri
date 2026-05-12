@@ -170,6 +170,31 @@
     cursor: pointer;
   }
 
+  /* 種別 (v6新規) */
+  .kinds {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+  .kind-btn {
+    padding: 14px 8px;
+    font-size: 14px;
+    font-weight: bold;
+    border: 2px solid #888;
+    border-radius: 8px;
+    background: #fff;
+    color: #333;
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .kind-btn.active {
+    background: #00695c;
+    color: #fff;
+    border-color: #004d40;
+  }
+
   /* モード */
   .modes {
     display: grid;
@@ -490,6 +515,12 @@
     </div>
   </div>
 
+  <div class="section-label">種別</div>
+  <div class="kinds">
+    <button class="kind-btn" data-kind="表層土壌">表層土壌</button>
+    <button class="kind-btn" data-kind="配管・ピット・盛土下">配管・ピット・盛土下</button>
+  </div>
+
   <div class="section-label">工程モード</div>
   <div class="modes">
     <button class="mode-btn" data-mode="採取">採取</button>
@@ -514,6 +545,8 @@
 
   <div class="scan-area">
     <div class="mode-status">
+      <span id="currentKind" style="color:#00695c;font-weight:bold;"></span>
+      <span style="margin: 0 6px; color: #ccc;">|</span>
       モード: <span id="currentMode" class="current">未選択</span>
       <span id="currentWorker" class="worker"></span>
     </div>
@@ -641,10 +674,30 @@
   }
 
   let currentMode = null;
+  let currentKind = null;  // v6: '表層土壌' / '配管・ピット・盛土下'
   let currentWorker = '';
   const history = [];
   const HISTORY_MAX = 10;
-  let pendingConfirm = null; // {mode, code}
+  let pendingConfirm = null; // {mode, code, kind}
+
+  // 種別を端末ごとに記憶 (現場切替時はリセットせず維持)
+  const LS_KIND = 'lab_kanri_kind';
+  function setKind(kind) {
+    currentKind = kind || null;
+    if (kind) localStorage.setItem(LS_KIND, kind);
+    document.querySelectorAll('.kind-btn').forEach(function(b) {
+      b.classList.toggle('active', b.dataset.kind === kind);
+    });
+    updateKindLabel();
+  }
+  function loadKindFromStorage() {
+    const k = localStorage.getItem(LS_KIND);
+    if (k === '表層土壌' || k === '配管・ピット・盛土下') setKind(k);
+  }
+  function updateKindLabel() {
+    const el = document.getElementById('currentKind');
+    if (el) el.textContent = currentKind ? '種別: ' + currentKind : '';
+  }
 
   // バッチ関連の状態(先頭で初期化しておく)
   let batchMode = false;
@@ -715,6 +768,14 @@
       .withFailureHandler(e => alert('通信エラー: ' + e.message))
       .addWorker(name.trim());
   }
+
+  // ---- 種別 (v6) ----
+  document.querySelectorAll('.kind-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      setKind(btn.dataset.kind);
+      focusInput();
+    });
+  });
 
   // ---- モード ----
   document.querySelectorAll('.mode-btn').forEach(btn => {
@@ -1016,7 +1077,7 @@
     google.script.run
       .withSuccessHandler(onScanResult)
       .withFailureHandler(onScanError)
-      .handleScan(getCurrentSpreadsheetId(), mode, code, !!force);
+      .handleScan(getCurrentSpreadsheetId(), currentKind || '', mode, code, !!force);
   }
 
   // ろかモード2段スキャン用：1個目（ろか）を取得した時点の担当者で記録する
@@ -1026,7 +1087,7 @@
     google.script.run
       .withSuccessHandler(onScanResult)
       .withFailureHandler(onScanError)
-      .handleScan(getCurrentSpreadsheetId(), mode, code, !!force, overrideWorker || '');
+      .handleScan(getCurrentSpreadsheetId(), currentKind || '', mode, code, !!force, overrideWorker || '');
   }
 
   function onScanResult(res) {
@@ -1353,7 +1414,7 @@
       google.script.run
         .withSuccessHandler(resolve)
         .withFailureHandler(e => resolve({ ok: false, message: '通信エラー: ' + e.message }))
-        .handleScan(getCurrentSpreadsheetId(), mode, code, !!force);
+        .handleScan(getCurrentSpreadsheetId(), currentKind || '', mode, code, !!force);
     });
   }
 
@@ -1869,6 +1930,7 @@
 
   // 初期化
   refreshSiteBar();
+  loadKindFromStorage();  // v6: 前回選択した種別を復元
   if (getCurrentSpreadsheetId()) {
     loadWorkers();
   } else {
