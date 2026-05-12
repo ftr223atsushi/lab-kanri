@@ -256,15 +256,32 @@ function resolveBaseCode_(ss, kind, baseCode) {
 
   // 必要な列幅 (コード列まで)
   const lastCol = Math.max(cfg.pickupCodeCol, cfg.pickupPointCol, cfg.pickupUdCol || 0);
-  const range = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
+  // 文字列マッチ用に getDisplayValues、フォールバック用に getValues も取得
+  const dispRange = sheet.getRange(2, 1, lastRow - 1, lastCol).getDisplayValues();
+  const valRange  = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
 
-  const target = String(baseCode).trim();
-  for (let i = 0; i < range.length; i++) {
-    const code = String(range[i][cfg.pickupCodeCol - 1]).trim();
-    if (code === target) {
-      const point = String(range[i][cfg.pickupPointCol - 1]).trim();
+  const target    = String(baseCode).trim();
+  const targetNum = Number(target);
+  const hasNum    = !isNaN(targetNum) && target !== '';
+
+  for (let i = 0; i < dispRange.length; i++) {
+    const codeDisp = String(dispRange[i][cfg.pickupCodeCol - 1]).trim();
+    const codeRaw  = valRange[i][cfg.pickupCodeCol - 1];
+    const codeStr  = String(codeRaw).trim();
+
+    let hit = false;
+    // (a) 表示値と完全一致 (例: 表示 "00001" vs 入力 "00001")
+    if (codeDisp === target) hit = true;
+    // (b) 生値の文字列と一致 (例: セル "0001" 文字列値 vs 入力 "0001")
+    else if (codeStr === target) hit = true;
+    // (c) 数値比較フォールバック (例: セル 1 (数値) vs 入力 "00001" → 共に 1)
+    else if (hasNum && codeRaw !== '' && codeRaw !== null && !isNaN(Number(codeRaw))
+             && Number(codeRaw) === targetNum) hit = true;
+
+    if (hit) {
+      const point = String(valRange[i][cfg.pickupPointCol - 1]).trim();
       const ud    = cfg.pickupUdCol
-        ? String(range[i][cfg.pickupUdCol - 1]).trim()
+        ? String(valRange[i][cfg.pickupUdCol - 1]).trim()
         : '';
       return { point: point, ud: ud };
     }
