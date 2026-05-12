@@ -99,7 +99,10 @@ const KIND_CONFIG = {
     }
   },
   '配管・ピット・盛土下': {
-    pickupCodeCol:  8,   // 地点抽出 H列
+    // ※ ヘッダー上は G="採取深度 下端"、H="コード" だが、
+    //   shast-picker が実データを G列に書き込んでいるため G列(=7) を採用。
+    //   shast-picker側が修正されたら 8 に戻す。
+    pickupCodeCol:  7,   // 地点抽出 G列 (実データ位置)
     pickupPointCol: 6,   // 地点抽出 F列
     pickupUdCol:    null, // 上下なし
     workSheet:      SHEET_HAIKAN,
