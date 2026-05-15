@@ -9,6 +9,8 @@
 <meta name="theme-color" content="#0d9488">
 <!-- アイコン (試験管+バーコード, ティール) -->
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9Ijk2IiBmaWxsPSIjMGQ5NDg4Ii8+PGRlZnM+PGNsaXBQYXRoIGlkPSJ0Ij48cGF0aCBkPSJNIDE5MCAxMTAgTCAxOTAgMzYwIEEgNjYgNjYgMCAwIDAgMzIyIDM2MCBMIDMyMiAxMTAgWiIvPjwvY2xpcFBhdGg+PC9kZWZzPjxyZWN0IHg9IjE4MCIgeT0iMjMwIiB3aWR0aD0iMTYwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iI2ZmZiIgY2xpcC1wYXRoPSJ1cmwoI3QpIi8+PGcgZmlsbD0iIzBkOTQ4OCIgY2xpcC1wYXRoPSJ1cmwoI3QpIj48cmVjdCB4PSIyMDIiIHk9IjI1MCIgd2lkdGg9IjEyIiBoZWlnaHQ9IjE4MCIvPjxyZWN0IHg9IjIyMiIgeT0iMjUwIiB3aWR0aD0iNiIgaGVpZ2h0PSIxODAiLz48cmVjdCB4PSIyMzYiIHk9IjI1MCIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE4MCIvPjxyZWN0IHg9IjI2MCIgeT0iMjUwIiB3aWR0aD0iOCIgaGVpZ2h0PSIxODAiLz48cmVjdCB4PSIyNzYiIHk9IjI1MCIgd2lkdGg9IjE0IiBoZWlnaHQ9IjE4MCIvPjxyZWN0IHg9IjI5OCIgeT0iMjUwIiB3aWR0aD0iNiIgaGVpZ2h0PSIxODAiLz48cmVjdCB4PSIzMTIiIHk9IjI1MCIgd2lkdGg9IjEwIiBoZWlnaHQ9IjE4MCIvPjwvZz48cGF0aCBkPSJNIDE5MCAxMTAgTCAxOTAgMzYwIEEgNjYgNjYgMCAwIDAgMzIyIDM2MCBMIDMyMiAxMTAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxOCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjxyZWN0IHg9IjE2OCIgeT0iODQiIHdpZHRoPSIxNzYiIGhlaWdodD0iMzgiIHJ4PSIxMCIgZmlsbD0iI2ZmZiIvPjwvc3ZnPg==">
+<!-- カメラスキャン用ライブラリ (QR+1Dバーコード両対応) -->
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <link rel="apple-touch-icon" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9Ijk2IiBmaWxsPSIjMGQ5NDg4Ii8+PGRlZnM+PGNsaXBQYXRoIGlkPSJ0Ij48cGF0aCBkPSJNIDE5MCAxMTAgTCAxOTAgMzYwIEEgNjYgNjYgMCAwIDAgMzIyIDM2MCBMIDMyMiAxMTAgWiIvPjwvY2xpcFBhdGg+PC9kZWZzPjxyZWN0IHg9IjE4MCIgeT0iMjMwIiB3aWR0aD0iMTYwIiBoZWlnaHQ9IjIwMCIgZmlsbD0iI2ZmZiIgY2xpcC1wYXRoPSJ1cmwoI3QpIi8+PGcgZmlsbD0iIzBkOTQ4OCIgY2xpcC1wYXRoPSJ1cmwoI3QpIj48cmVjdCB4PSIyMDIiIHk9IjI1MCIgd2lkdGg9IjEyIiBoZWlnaHQ9IjE4MCIvPjxyZWN0IHg9IjIyMiIgeT0iMjUwIiB3aWR0aD0iNiIgaGVpZ2h0PSIxODAiLz48cmVjdCB4PSIyMzYiIHk9IjI1MCIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE4MCIvPjxyZWN0IHg9IjI2MCIgeT0iMjUwIiB3aWR0aD0iOCIgaGVpZ2h0PSIxODAiLz48cmVjdCB4PSIyNzYiIHk9IjI1MCIgd2lkdGg9IjE0IiBoZWlnaHQ9IjE4MCIvPjxyZWN0IHg9IjI5OCIgeT0iMjUwIiB3aWR0aD0iNiIgaGVpZ2h0PSIxODAiLz48cmVjdCB4PSIzMTIiIHk9IjI1MCIgd2lkdGg9IjEwIiBoZWlnaHQ9IjE4MCIvPjwvZz48cGF0aCBkPSJNIDE5MCAxMTAgTCAxOTAgMzYwIEEgNjYgNjYgMCAwIDAgMzIyIDM2MCBMIDMyMiAxMTAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxOCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPjxyZWN0IHg9IjE2OCIgeT0iODQiIHdpZHRoPSIxNzYiIGhlaWdodD0iMzgiIHJ4PSIxMCIgZmlsbD0iI2ZmZiIvPjwvc3ZnPg==">
 <style>
   * { box-sizing: border-box; }
@@ -426,6 +428,64 @@
     margin: 6px 0 0 0;
   }
 
+  /* カメラスキャン (v6+) */
+  .camera-area {
+    background: #000;
+    border-radius: 8px;
+    padding: 8px;
+    margin-bottom: 10px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  }
+  #cameraView {
+    width: 100%;
+    max-width: 420px;
+    margin: 0 auto;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #111;
+    min-height: 240px;
+  }
+  #cameraView video { width: 100% !important; height: auto !important; }
+  .camera-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    padding: 6px 10px;
+    background: rgba(255,255,255,0.95);
+    border-radius: 6px;
+  }
+  .camera-status-text {
+    flex: 1;
+    font-size: 13px;
+    font-weight: bold;
+    color: #333;
+  }
+  .camera-status-text.ready    { color: #2e7d32; }
+  .camera-status-text.cooldown { color: #ef6c00; }
+  .camera-status-text.error    { color: #c62828; }
+  .camera-stop-btn {
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: bold;
+    border: 2px solid #b71c1c;
+    border-radius: 6px;
+    background: #e53935;
+    color: #fff;
+    cursor: pointer;
+  }
+  .camera-last-read {
+    margin-top: 6px;
+    padding: 6px 10px;
+    background: rgba(46,125,50,0.85);
+    color: #fff;
+    border-radius: 6px;
+    font-size: 12px;
+    text-align: center;
+    min-height: 16px;
+  }
+  .camera-last-read:empty { display: none; }
+
   /* 未設定時のオーバーレイ (操作禁止) */
   .disabled-overlay {
     position: relative;
@@ -540,7 +600,18 @@
   <div id="inputModeRow" class="batch-row">
     <button id="modeScanner" class="batch-toggle active">スキャナー</button>
     <button id="modeManual" class="batch-toggle">⌨ 手打ち</button>
-    <span style="flex:1;font-size:11px;color:#888;text-align:right;">バーコードが汚れて読めない時は手打ち</span>
+    <button id="modeCamera" class="batch-toggle">📷 カメラ</button>
+    <span style="flex:1;font-size:11px;color:#888;text-align:right;">バーコード読めない時は手打ち / 印刷シートはカメラ</span>
+  </div>
+
+  <!-- カメラビュー (カメラモード時のみ表示) -->
+  <div id="cameraArea" class="camera-area" style="display:none;">
+    <div id="cameraView"></div>
+    <div class="camera-status">
+      <span id="cameraStatus" class="camera-status-text">📷 起動中...</span>
+      <button id="cameraStopBtn" class="camera-stop-btn">停止</button>
+    </div>
+    <div id="cameraLastRead" class="camera-last-read"></div>
   </div>
 
   <div class="scan-area">
@@ -1340,29 +1411,148 @@
   // ---- 入力モード(スキャナー / 手打ち)切替 ----
   const modeScannerBtn = document.getElementById('modeScanner');
   const modeManualBtn  = document.getElementById('modeManual');
+  const modeCameraBtn  = document.getElementById('modeCamera');
   const scanHintEl     = document.getElementById('scanHint');
+  const cameraAreaEl   = document.getElementById('cameraArea');
 
   function setInputMode(mode) {
-    inputMode = (mode === 'manual') ? 'manual' : 'scanner';
+    // 'scanner' | 'manual' | 'camera'
+    const next = (mode === 'manual' || mode === 'camera') ? mode : 'scanner';
+    const prev = inputMode;
+    inputMode = next;
+
     modeScannerBtn.classList.toggle('active', inputMode === 'scanner');
     modeManualBtn.classList.toggle('active',  inputMode === 'manual');
+    modeCameraBtn.classList.toggle('active',  inputMode === 'camera');
+
     if (scanHintEl) {
-      scanHintEl.textContent = inputMode === 'scanner'
+      scanHintEl.textContent = (inputMode === 'scanner')
         ? 'スキャナーモード: 80ms静止で自動送信 (ソフトキーボード抑止)'
-        : '手打ちモード: 入力後 Enter または「送信」ボタンで送信';
+        : (inputMode === 'manual')
+          ? '手打ちモード: 入力後 Enter または「送信」ボタンで送信'
+          : 'カメラモード: バーコード/QR を画面に向ける → 1.5秒クールダウンで連続スキャン';
     }
     // ソフトキーボード/IME の抑止 (スキャナー時) ↔ 通常 (手打ち時)
     scanInput.setAttribute('inputmode', inputMode === 'scanner' ? 'none' : 'text');
+
     // 自動送信タイマーが残っていればキャンセル
     if (autoSubmitTimer) { clearTimeout(autoSubmitTimer); autoSubmitTimer = null; }
-    // 物理キーバッファもクリア (モード切替時)
     clearPhysicalBuffer();
     scanInput.value = '';
-    focusInput();
+
+    // カメラ起動/停止
+    if (inputMode === 'camera') {
+      if (cameraAreaEl) cameraAreaEl.style.display = 'block';
+      startCamera();
+    } else {
+      if (prev === 'camera') stopCamera();
+      if (cameraAreaEl) cameraAreaEl.style.display = 'none';
+      focusInput();
+    }
   }
 
   modeScannerBtn.addEventListener('click', () => setInputMode('scanner'));
   modeManualBtn.addEventListener('click',  () => setInputMode('manual'));
+  modeCameraBtn.addEventListener('click',  () => setInputMode('camera'));
+
+  // ====== カメラスキャン (案C: ハイブリッド連続スキャン+クールダウン) ======
+  let html5QrCode = null;
+  let cameraStarting = false;
+  let cameraCooldownUntil = 0;
+  let cameraLastCode = '';
+  const CAMERA_COOLDOWN_MS = 1500;
+
+  const cameraStatusEl   = document.getElementById('cameraStatus');
+  const cameraLastReadEl = document.getElementById('cameraLastRead');
+  const cameraStopBtnEl  = document.getElementById('cameraStopBtn');
+
+  function setCameraStatus(text, cls) {
+    if (!cameraStatusEl) return;
+    cameraStatusEl.textContent = text;
+    cameraStatusEl.className = 'camera-status-text' + (cls ? ' ' + cls : '');
+  }
+
+  async function startCamera() {
+    if (!requireSpreadsheet()) {
+      setInputMode('scanner');
+      return;
+    }
+    if (typeof Html5Qrcode === 'undefined') {
+      setCameraStatus('❌ カメラライブラリの読み込みに失敗 (ネット接続を確認)', 'error');
+      return;
+    }
+    if (cameraStarting || html5QrCode) return;
+    cameraStarting = true;
+    setCameraStatus('📷 起動中...', '');
+    try {
+      const cameras = await Html5Qrcode.getCameras();
+      if (!cameras || cameras.length === 0) {
+        setCameraStatus('❌ カメラが見つかりません', 'error');
+        cameraStarting = false;
+        return;
+      }
+      // 背面カメラ優先
+      let cameraId = cameras[0].id;
+      const back = cameras.find(c => /back|rear|environment|背面/i.test(c.label || ''));
+      if (back) cameraId = back.id;
+
+      html5QrCode = new Html5Qrcode('cameraView');
+      await html5QrCode.start(
+        cameraId,
+        {
+          fps: 10,
+          qrbox: { width: 250, height: 180 }
+        },
+        (decodedText) => onCameraDetect(decodedText),
+        (_err) => { /* 失敗ログは無視 (1フレームごとに来るので) */ }
+      );
+      setCameraStatus('✅ 読取待機中', 'ready');
+      cameraStarting = false;
+    } catch (e) {
+      setCameraStatus('❌ 起動失敗: ' + (e && e.message ? e.message : e), 'error');
+      cameraStarting = false;
+      html5QrCode = null;
+    }
+  }
+
+  async function stopCamera() {
+    if (!html5QrCode) return;
+    try { await html5QrCode.stop(); } catch (e) {}
+    try { html5QrCode.clear(); } catch (e) {}
+    html5QrCode = null;
+    setCameraStatus('停止中', '');
+    if (cameraLastReadEl) cameraLastReadEl.textContent = '';
+  }
+
+  function onCameraDetect(text) {
+    const now = Date.now();
+    if (now < cameraCooldownUntil) return;
+    const trimmed = String(text || '').trim();
+    if (!trimmed) return;
+    // 同じコード連続検出はクールダウン中スキップ
+    if (trimmed === cameraLastCode && (now - (cameraCooldownUntil - CAMERA_COOLDOWN_MS)) < CAMERA_COOLDOWN_MS * 2) {
+      return;
+    }
+    cameraLastCode = trimmed;
+    cameraCooldownUntil = now + CAMERA_COOLDOWN_MS;
+
+    setCameraStatus('⏳ クールダウン中... (' + (CAMERA_COOLDOWN_MS/1000).toFixed(1) + '秒)', 'cooldown');
+    if (cameraLastReadEl) cameraLastReadEl.textContent = '読取: ' + trimmed;
+
+    // 既存のスキャン処理に流す
+    submitScan(currentMode, trimmed, false);
+
+    // クールダウン明けにステータス戻す
+    setTimeout(() => {
+      if (inputMode === 'camera' && html5QrCode) {
+        setCameraStatus('✅ 読取待機中', 'ready');
+      }
+    }, CAMERA_COOLDOWN_MS);
+  }
+
+  if (cameraStopBtnEl) {
+    cameraStopBtnEl.addEventListener('click', () => setInputMode('scanner'));
+  }
 
   // ---- まとめてモード(バッチ) ----
   const batchToggleBtn = document.getElementById('batchToggle');
