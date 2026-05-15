@@ -843,6 +843,63 @@
   let isComposing = false;
   const SCANNER_IDLE_MS = 80; // スキャナーモード時、最後の入力からこの時間無入力で自動送信
 
+  // ====== 物理キーバイパス (スキャナーモード IME完全バイパス) ======
+  // IME (あ/A/1) が何モードでも、keydown の e.code から半角文字を組み立てて
+  // 自動送信する。IME経由で混入した文字は input ハンドラ側で破棄。
+  let physicalBuffer = '';
+  let physicalIdleTimer = null;
+
+  function clearPhysicalBuffer() {
+    physicalBuffer = '';
+    if (physicalIdleTimer) { clearTimeout(physicalIdleTimer); physicalIdleTimer = null; }
+  }
+
+  function flushPhysicalBuffer() {
+    const code = physicalBuffer.trim();
+    clearPhysicalBuffer();
+    scanInput.value = '';
+    if (code.length >= 1 && currentMode) {
+      submitScan(currentMode, code, false);
+    } else if (code.length >= 1 && !currentMode) {
+      setResult('error', 'モードを選択してください');
+    }
+  }
+
+  // e.code から半角文字を取得 (US配列ベース、修飾キー考慮)
+  function codeToChar(e) {
+    if (e.ctrlKey || e.metaKey || e.altKey) return null;
+    const c = e.code;
+    if (!c) return null;
+    if (c.startsWith('Digit')) {
+      const d = c.substring(5);
+      if (e.shiftKey) {
+        return ({'0':')','1':'!','2':'@','3':'#','4':'$','5':'%','6':'^','7':'&','8':'*','9':'('})[d] || d;
+      }
+      return d;
+    }
+    if (c.startsWith('Numpad')) {
+      const t = c.substring(6);
+      if (/^\d$/.test(t)) return t;
+      if (t === 'Subtract') return '-';
+      if (t === 'Decimal')  return '.';
+      if (t === 'Divide')   return '/';
+      if (t === 'Multiply') return '*';
+      if (t === 'Add')      return '+';
+      return null;
+    }
+    if (c.startsWith('Key')) {
+      const ch = c.substring(3);
+      return e.shiftKey ? ch : ch.toLowerCase();
+    }
+    if (c === 'Minus')  return e.shiftKey ? '_' : '-';
+    if (c === 'Period') return e.shiftKey ? '>' : '.';
+    if (c === 'Slash')  return e.shiftKey ? '?' : '/';
+    if (c === 'Equal')  return e.shiftKey ? '+' : '=';
+    if (c === 'Comma')  return e.shiftKey ? '<' : ',';
+    if (c === 'Space')  return ' ';
+    return null;
+  }
+
   // IME入力中フラグ(手打ちモードで日本語IMEが暴れないように)
   scanInput.addEventListener('compositionstart', () => { isComposing = true; });
   scanInput.addEventListener('compositionend',   () => { isComposing = false; });
@@ -862,23 +919,12 @@
     }
 
     if (inputMode === 'scanner') {
-      // スキャナーモード: 全角→半角を即時正規化、80ms静止で自動送信
-      const before = scanInput.value;
-      const after = normalizeCode(before);
-      if (before !== after) {
-        const pos = scanInput.selectionStart;
-        scanInput.value = after;
-        try { scanInput.setSelectionRange(pos, pos); } catch (e) {}
+      // スキャナーモード: 物理キーバイパス管轄
+      // IME経由で混入した文字は physicalBuffer に強制リセットして破棄
+      if (scanInput.value !== physicalBuffer) {
+        scanInput.value = physicalBuffer;
       }
       updateAutoHint();
-
-      if (autoSubmitTimer) clearTimeout(autoSubmitTimer);
-      if (scanInput.value.trim().length >= 1) {
-        autoSubmitTimer = setTimeout(() => {
-          autoSubmitTimer = null;
-          if (scanInput.value.trim().length >= 1) submitFromInput();
-        }, SCANNER_IDLE_MS);
-      }
     } else {
       // 手打ちモード: 値を書き換えない(IMEを邪魔しない)、自動送信しない
       // ヒント表示だけは一応出す(IME確定後の値で)
@@ -904,8 +950,48 @@
     }
   }, 500);
 
-  // Enter押下 → 送信
+  // Enter押下 → 送信 + スキャナーモード時は物理キーバイパス
   scanInput.addEventListener('keydown', (e) => {
+    // ----- スキャナーモード: IME完全バイパス -----
+    if (inputMode === 'scanner') {
+      // Enter (USキー / NumpadEnter) → バッファを送信
+      if (e.key === 'Enter' || e.code === 'Enter' || e.code === 'NumpadEnter') {
+        e.preventDefault();
+        flushPhysicalBuffer();
+        return;
+      }
+      // Backspace → バッファ末尾削除
+      if (e.code === 'Backspace' || e.key === 'Backspace') {
+        physicalBuffer = physicalBuffer.slice(0, -1);
+        scanInput.value = physicalBuffer;
+        e.preventDefault();
+        return;
+      }
+      // Escape → バッファクリア
+      if (e.code === 'Escape' || e.key === 'Escape') {
+        clearPhysicalBuffer();
+        scanInput.value = '';
+        e.preventDefault();
+        return;
+      }
+      // 修飾キー単独は無視
+      if (e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' ||
+          e.key === 'Meta'  || e.key === 'CapsLock') {
+        return;
+      }
+      // 物理キー → 半角文字 → バッファに追加 (IMEを介さない)
+      const ch = codeToChar(e);
+      if (ch !== null) {
+        physicalBuffer += ch;
+        scanInput.value = physicalBuffer;
+        e.preventDefault();
+        // 80ms静止で自動送信
+        if (physicalIdleTimer) clearTimeout(physicalIdleTimer);
+        physicalIdleTimer = setTimeout(flushPhysicalBuffer, SCANNER_IDLE_MS);
+      }
+      return;
+    }
+    // ----- 手打ちモード: 既存通り Enter で送信 -----
     if (e.key === 'Enter') {
       e.preventDefault();
       submitFromInput();
@@ -1269,6 +1355,9 @@
     scanInput.setAttribute('inputmode', inputMode === 'scanner' ? 'none' : 'text');
     // 自動送信タイマーが残っていればキャンセル
     if (autoSubmitTimer) { clearTimeout(autoSubmitTimer); autoSubmitTimer = null; }
+    // 物理キーバッファもクリア (モード切替時)
+    clearPhysicalBuffer();
+    scanInput.value = '';
     focusInput();
   }
 
