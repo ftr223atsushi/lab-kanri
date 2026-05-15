@@ -1020,10 +1020,12 @@
   }
   function focusInput() {
     if (isAnyModalOpen()) return;
+    if (inputMode === 'camera') return; // カメラモード時はソフトキーボード抑止
     scanInput.focus();
     scanInput.select();
   }
   setInterval(() => {
+    if (inputMode === 'camera') return; // カメラモード時はフォーカスを奪わない
     if (document.activeElement !== scanInput && !isAnyModalOpen()) {
       focusInput();
     }
@@ -1233,6 +1235,8 @@
     if (e.target && e.target.id === 'manualSendBtn') return;
     // モーダル表示中は何もしない (スキャン入力欄にフォーカスを奪わない)
     if (isAnyModalOpen()) return;
+    // カメラモード時はソフトキーボード抑止
+    if (inputMode === 'camera') return;
     focusInput();
   });
 
@@ -1440,8 +1444,9 @@
           ? '手打ちモード: 入力後 Enter または「送信」ボタンで送信'
           : 'カメラモード: バーコード/QR を画面に向ける → 1.5秒クールダウンで連続スキャン';
     }
-    // ソフトキーボード/IME の抑止 (スキャナー時) ↔ 通常 (手打ち時)
-    scanInput.setAttribute('inputmode', inputMode === 'scanner' ? 'none' : 'text');
+    // ソフトキーボード/IME の抑止 (スキャナー/カメラ時) ↔ 通常 (手打ち時)
+    scanInput.setAttribute('inputmode',
+      (inputMode === 'scanner' || inputMode === 'camera') ? 'none' : 'text');
 
     // 自動送信タイマーが残っていればキャンセル
     if (autoSubmitTimer) { clearTimeout(autoSubmitTimer); autoSubmitTimer = null; }
@@ -1451,6 +1456,11 @@
     // カメラ起動/停止
     if (inputMode === 'camera') {
       if (cameraAreaEl) cameraAreaEl.style.display = 'block';
+      // カメラモード時はソフトキーボード出さない: scanInput からフォーカス外す
+      try { scanInput.blur(); } catch (e) {}
+      if (document.activeElement && document.activeElement.blur) {
+        try { document.activeElement.blur(); } catch (e) {}
+      }
       startCamera();
     } else {
       if (prev === 'camera') stopCamera();
