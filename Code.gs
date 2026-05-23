@@ -97,6 +97,7 @@ const KIND_CONFIG = {
     pickupCodeCol:   4,  // 地点抽出 D列
     workSheet:       SHEET_HYOSO,
     hasUd:           true,
+    // 書込先シート: A=状態 B=地点 C=上下 D=採取 E=採取担当 F=受入 G=受入担当 H=風乾 I=風乾担当
     workCols: {
       STATUS:   1, POINT: 2, UD: 3,
       SAISHU:   4, SAISHU_W: 5,   // D,E
@@ -113,10 +114,13 @@ const KIND_CONFIG = {
     hasUd:           false,
     // 土壌ガスは「受入」モードのみ shast-kanri で扱う
     availableModes: ['受入'],
+    // 書込先シート: A=状態 B=地点名 C=削孔時間 D=採取時間 E=受入 F=担当者
+    // shast-kanri は E列(受入) と F列(担当者) のみ書込。SAISHU は意図的に未定義
+    // (MODES['受入'].prevCol='SAISHU' のチェックを skip させる)
     workCols: {
       STATUS:   1, POINT: 2,
       SAKKO:    3,   // C列 削孔時間 (shast-kanriは触らない)
-      SAISHU:   4,   // D列 採取時間 (shast-kanriは触らない)
+      // SAISHU は未定義 → handlePhase1 の順番チェックが skip される
       UKEIRE:   5, UKEIRE_W: 6   // E,F (shast-kanriが書込)
     }
   },
@@ -127,9 +131,10 @@ const KIND_CONFIG = {
     pickupCodeCol:   11,  // 地点抽出 K列
     workSheet:       SHEET_HAIKAN,
     hasUd:           false,
+    // 書込先シート: A=状態 B=地点 C=採取深度 D=採取 E=採取担当 F=受入 G=受入担当 H=風乾 I=風乾担当
     workCols: {
       STATUS:   1, POINT: 2,
-      DEPTH:    3,   // C列 採取深度 (shast-kanri は表示用、書込はしない)
+      DEPTH:    3,   // C列 採取深度 (shast-kanri は日報用に読込)
       SAISHU:   4, SAISHU_W: 5,   // D,E
       UKEIRE:   6, UKEIRE_W: 7,   // F,G
       FUKAN:    8, FUKAN_W:  9    // H,I
@@ -725,10 +730,20 @@ function handlePhase1(ss, kind, mode, cfg, baseCode, worker, force, autoSwitched
   if (fontColor) workerCell.setFontColor(fontColor);
   else workerCell.setFontColor(null);
 
-  // 日報シートに追記 (受入/風乾のみ)
+  // 日報シートに追記 (受入/風乾/振り/ろか/採取のうち対象モードのみ)
+  // 日報B列: 表層土壌=上下、配管下=採取深度、土壌ガス=空
   try {
-    const udOrEmpty = kc.hasUd ? udDisplay(ud) : '';
-    logToDailyReport(ss, mode, point, udOrEmpty, worker, now);
+    let dailyBCol = '';
+    if (kc.hasUd) {
+      dailyBCol = udDisplay(ud);
+    } else if (kind === '配管・ピット・盛土下' && kc.workCols.DEPTH) {
+      // 配管下は書込先シートのC列(DEPTH)から採取深度を取得
+      try {
+        const d = sheet.getRange(foundRow, kc.workCols.DEPTH).getDisplayValue();
+        dailyBCol = String(d || '').trim();
+      } catch (e) {}
+    }
+    logToDailyReport(ss, mode, point, dailyBCol, worker, now);
   } catch (e) {}
 
   // 風乾完了 → 上下揃いチェック → M列追加 (表層土壌のみ。配管下は上下なしのため別ロジック)
