@@ -73,49 +73,75 @@ const ROW_GAP_HEIGHT       = 8;
 const HEADER_ROW_HEIGHT    = 24;
 const BARCODE_PRINT_FLAG_COL = 7; // G列: 印刷フラグ用チェックボックス
 
-// ========== 種別×シート構成 (v6) ==========
-// 地点抽出シート:
-//   土壌ブロック  : A=地点名 B=上下 C=コード         (kind: 表層土壌)
-//   ガスブロック  : D=地点名 E=コード               (kind: 土壌ガス)
-//   配管ブロック  : F=地点 G=採取深度下端 H=コード   (kind: 配管・ピット・盛土下)
+// ========== 種別×シート構成 (v7: 新スプレッドシート対応) ==========
+// 地点抽出シート (各種別ブロックに「状態」列が追加された):
+//   土壌ブロック  : A=状態 B=地点名 C=上下 D=コード                  (kind: 表層土壌)
+//   ガスブロック  : E=状態 F=地点名 G=コード                          (kind: 土壌ガス)
+//   配管ブロック  : H=状態 I=地点 J=採取深度 K=コード                  (kind: 配管・ピット・盛土下)
 //
-// 各種別の作業シート:
-//   表層土壌: A=地点 B=上下 C=採取 D=採取担当 E=受入 F=受入担当 G=風乾 H=風乾担当
-//   配管下  : A=地点      B=採取 C=採取担当 D=受入 E=受入担当 F=風乾 G=風乾担当 (上下なし)
+// 各種別の作業シート (こちらも「状態」列が冒頭に追加):
+//   表層土壌:   A=状態 B=地点 C=上下     D=採取日時 E=採取担当 F=受入日時 G=受入担当 H=風乾日時 I=風乾担当
+//   配管下:     A=状態 B=地点 C=採取深度 D=採取日時 E=採取担当 F=受入日時 G=受入担当 H=風乾日時 I=風乾担当
+//   土壌ガス:   A=状態 B=地点名 C=削孔時間 D=採取時間 E=受入 F=担当者
+//                ※ shast-kanri は受入(E)+担当(F)のみ書込 (削孔/採取は shast-picker または別系統)
+//
+// 状態列の値: ''(通常) / '削除' / '追加' / '変更'
+//   - '削除' の地点は警告ダイアログ → 確認後に赤文字で記録
 //
 // 種別名 → 設定
 const KIND_CONFIG = {
   '表層土壌': {
-    pickupCodeCol:  3,   // 地点抽出 C列
-    pickupPointCol: 1,   // 地点抽出 A列
-    pickupUdCol:    2,   // 地点抽出 B列 (上下)
-    workSheet:      SHEET_HYOSO,
-    hasUd:          true,
+    pickupStatusCol: 1,  // 地点抽出 A列
+    pickupPointCol:  2,  // 地点抽出 B列
+    pickupUdCol:     3,  // 地点抽出 C列 (上下)
+    pickupCodeCol:   4,  // 地点抽出 D列
+    workSheet:       SHEET_HYOSO,
+    hasUd:           true,
     workCols: {
-      POINT:    1, UD: 2,
-      SAISHU:   3, SAISHU_W: 4,   // C,D
-      UKEIRE:   5, UKEIRE_W: 6,   // E,F
-      FUKAN:    7, FUKAN_W:  8    // G,H
+      STATUS:   1, POINT: 2, UD: 3,
+      SAISHU:   4, SAISHU_W: 5,   // D,E
+      UKEIRE:   6, UKEIRE_W: 7,   // F,G
+      FUKAN:    8, FUKAN_W:  9    // H,I
+    }
+  },
+  '土壌ガス': {
+    pickupStatusCol: 5,  // 地点抽出 E列
+    pickupPointCol:  6,  // 地点抽出 F列
+    pickupUdCol:     null,
+    pickupCodeCol:   7,  // 地点抽出 G列
+    workSheet:       SHEET_GAS,
+    hasUd:           false,
+    // 土壌ガスは「受入」モードのみ shast-kanri で扱う
+    availableModes: ['受入'],
+    workCols: {
+      STATUS:   1, POINT: 2,
+      SAKKO:    3,   // C列 削孔時間 (shast-kanriは触らない)
+      SAISHU:   4,   // D列 採取時間 (shast-kanriは触らない)
+      UKEIRE:   5, UKEIRE_W: 6   // E,F (shast-kanriが書込)
     }
   },
   '配管・ピット・盛土下': {
-    // ※ ヘッダー上は G="採取深度 下端"、H="コード" だが、
-    //   shast-picker が実データを G列に書き込んでいるため G列(=7) を採用。
-    //   shast-picker側が修正されたら 8 に戻す。
-    pickupCodeCol:  7,   // 地点抽出 G列 (実データ位置)
-    pickupPointCol: 6,   // 地点抽出 F列
-    pickupUdCol:    null, // 上下なし
-    workSheet:      SHEET_HAIKAN,
-    hasUd:          false,
+    pickupStatusCol: 8,   // 地点抽出 H列
+    pickupPointCol:  9,   // 地点抽出 I列
+    pickupUdCol:     null,
+    pickupCodeCol:   11,  // 地点抽出 K列
+    workSheet:       SHEET_HAIKAN,
+    hasUd:           false,
     workCols: {
-      POINT:    1,
-      SAISHU:   2, SAISHU_W: 3,   // B,C
-      UKEIRE:   4, UKEIRE_W: 5,   // D,E
-      FUKAN:    6, FUKAN_W:  7    // F,G
+      STATUS:   1, POINT: 2,
+      DEPTH:    3,   // C列 採取深度 (shast-kanri は表示用、書込はしない)
+      SAISHU:   4, SAISHU_W: 5,   // D,E
+      UKEIRE:   6, UKEIRE_W: 7,   // F,G
+      FUKAN:    8, FUKAN_W:  9    // H,I
     }
   }
-  // '土壌ガス': v6では未対応 (削孔工程が必要なため別途実装)
 };
+
+// 自動判別時の検索順序 (1コード=1種別前提、最初にヒットしたら確定)
+const KIND_AUTO_ORDER = ['表層土壌', '土壌ガス', '配管・ピット・盛土下'];
+
+// 削除地点を赤文字で記録するための色
+const DELETED_FONT_COLOR = '#c62828';
 
 // v5以前の旧 列定義 (現行ロジックは使わない、旧 工程時刻 シート用)
 const COL_KOTEI = {
@@ -243,9 +269,10 @@ function openSpreadsheet_(spreadsheetId) {
 /**
  * 地点抽出シートでベースコードから地点情報を引く。
  * @param {Spreadsheet} ss 開かれたスプレッドシート
- * @param {string} kind 種別名 ('表層土壌' / '配管・ピット・盛土下')
+ * @param {string} kind 種別名 ('表層土壌' / '土壌ガス' / '配管・ピット・盛土下')
  * @param {string} baseCode スキャンされたベースコード
- * @return {Object|null} { point, ud } または null (未発見)
+ * @return {Object|null} { point, ud, status } または null (未発見)
+ *                       status: ''(通常) / '削除' / '追加' / '変更'
  */
 function resolveBaseCode_(ss, kind, baseCode) {
   const cfg = KIND_CONFIG[kind];
@@ -257,9 +284,11 @@ function resolveBaseCode_(ss, kind, baseCode) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return null;
 
-  // 必要な列幅 (コード列まで)
-  const lastCol = Math.max(cfg.pickupCodeCol, cfg.pickupPointCol, cfg.pickupUdCol || 0);
-  // 文字列マッチ用に getDisplayValues、フォールバック用に getValues も取得
+  // 必要な列幅 (コード列まで、状態列含む)
+  const lastCol = Math.max(
+    cfg.pickupCodeCol, cfg.pickupPointCol,
+    cfg.pickupUdCol || 0, cfg.pickupStatusCol || 0
+  );
   const dispRange = sheet.getRange(2, 1, lastRow - 1, lastCol).getDisplayValues();
   const valRange  = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
 
@@ -273,21 +302,38 @@ function resolveBaseCode_(ss, kind, baseCode) {
     const codeStr  = String(codeRaw).trim();
 
     let hit = false;
-    // (a) 表示値と完全一致 (例: 表示 "00001" vs 入力 "00001")
     if (codeDisp === target) hit = true;
-    // (b) 生値の文字列と一致 (例: セル "0001" 文字列値 vs 入力 "0001")
     else if (codeStr === target) hit = true;
-    // (c) 数値比較フォールバック (例: セル 1 (数値) vs 入力 "00001" → 共に 1)
     else if (hasNum && codeRaw !== '' && codeRaw !== null && !isNaN(Number(codeRaw))
              && Number(codeRaw) === targetNum) hit = true;
 
     if (hit) {
-      const point = String(valRange[i][cfg.pickupPointCol - 1]).trim();
-      const ud    = cfg.pickupUdCol
-        ? String(valRange[i][cfg.pickupUdCol - 1]).trim()
-        : '';
-      return { point: point, ud: ud };
+      const point  = String(valRange[i][cfg.pickupPointCol - 1]).trim();
+      const ud     = cfg.pickupUdCol
+        ? String(valRange[i][cfg.pickupUdCol - 1]).trim() : '';
+      const status = cfg.pickupStatusCol
+        ? String(valRange[i][cfg.pickupStatusCol - 1]).trim() : '';
+      return { point: point, ud: ud, status: status };
     }
+  }
+  return null;
+}
+
+/**
+ * コードから種別を自動判別。地点抽出シートの全種別ブロックを順に検索し、
+ * 最初にヒットした種別を返す。
+ *
+ * @param {Spreadsheet} ss
+ * @param {string} baseCode
+ * @return {Object|null} { kind, point, ud, status } または null
+ */
+function autoDetectKind_(ss, baseCode) {
+  for (let i = 0; i < KIND_AUTO_ORDER.length; i++) {
+    const kind = KIND_AUTO_ORDER[i];
+    try {
+      const resolved = resolveBaseCode_(ss, kind, baseCode);
+      if (resolved) return Object.assign({ kind: kind }, resolved);
+    } catch (e) { /* シート無いなどは次へ */ }
   }
   return null;
 }
@@ -427,14 +473,17 @@ function setCurrentWorker(name) {
 
 // ========== メイン: スキャン処理 ==========
 /**
- * @param {string} spreadsheetId - 対象スプレッドシートID (端末側localStorageから渡る)
- * @param {string} kind          - 種別 ('表層土壌' / '配管・ピット・盛土下')
- * @param {string} mode          - UI上の選択モード (採取/受入/風乾/振り/ろか/分析)
+ * @param {string} spreadsheetId - 対象スプレッドシートID
+ * @param {string} kind          - 種別 ('auto' / '表層土壌' / '土壌ガス' / '配管・ピット・盛土下')
+ *                                 'auto' or '' なら地点抽出シートで自動振り分け
+ * @param {string} mode          - 工程モード (採取/受入/風乾/振り/ろか/分析)
  * @param {string} code          - スキャンコード
  * @param {boolean} force        - 順番警告無視
+ * @param {string} overrideWorker- 担当者上書き (ろか2段スキャン用)
+ * @param {boolean} confirmDeleted - 削除地点ダイアログでOK押した後の再送信フラグ
  * @return {Object}
  */
-function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker) {
+function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker, confirmDeleted) {
   try {
     if (!code || !String(code).trim()) {
       return { ok: false, message: 'コードが空です' };
@@ -498,11 +547,59 @@ function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker) {
 
     // フェーズ別処理
     if (cfg.phase === 1) {
-      // phase1 は種別 (kind) が必須
-      if (!kind || !KIND_CONFIG[kind]) {
-        return { ok: false, message: '種別を選択してください (表層土壌 / 配管・ピット・盛土下)' };
+      // v7: kind が 'auto' or '' なら地点抽出シートで自動判別
+      let effectiveKind = kind;
+      let preResolved = null;
+      if (!effectiveKind || effectiveKind === 'auto') {
+        preResolved = autoDetectKind_(ss, parsed.baseCode);
+        if (!preResolved) {
+          return {
+            ok: false,
+            message: 'コード ' + parsed.baseCode + ' が地点抽出シートのどの種別にも見つかりません'
+          };
+        }
+        effectiveKind = preResolved.kind;
+      } else {
+        if (!KIND_CONFIG[effectiveKind]) {
+          return { ok: false, message: '未対応の種別: ' + effectiveKind };
+        }
+        preResolved = resolveBaseCode_(ss, effectiveKind, parsed.baseCode);
+        if (!preResolved) {
+          return {
+            ok: false,
+            message: 'コード ' + parsed.baseCode + ' が「' + effectiveKind + '」に見つかりません'
+          };
+        }
+        preResolved.kind = effectiveKind;
       }
-      return handlePhase1(ss, kind, effectiveMode, cfg, parsed.baseCode, worker, force, autoSwitched);
+
+      const kc = KIND_CONFIG[effectiveKind];
+
+      // 土壌ガス等、availableModes が定義されている種別は工程を制限
+      if (kc.availableModes && kc.availableModes.indexOf(effectiveMode) < 0) {
+        return {
+          ok: false,
+          message: '「' + effectiveKind + '」では「' + effectiveMode + '」モードは使えません。使用可: ' + kc.availableModes.join('/')
+        };
+      }
+
+      // 状態=削除 の確認 (案C: 警告ダイアログ → 確認後に赤文字で記録)
+      if (preResolved.status === '削除' && !confirmDeleted) {
+        return {
+          ok: false,
+          needConfirm: 'deleted',
+          message: 'この地点は「削除」状態です。' + preResolved.point +
+                   (preResolved.ud ? '(' + preResolved.ud + ')' : '') +
+                   ' に ' + effectiveMode + ' を赤文字で記録しますか？',
+          kind: effectiveKind,
+          mode: effectiveMode,
+          code: parsed.baseCode,
+          autoMode: autoSwitched ? effectiveMode : null
+        };
+      }
+
+      const isDeleted = (preResolved.status === '削除');
+      return handlePhase1(ss, effectiveKind, effectiveMode, cfg, parsed.baseCode, worker, force, autoSwitched, isDeleted, preResolved);
     } else {
       return handlePhase2or3(ss, effectiveMode, cfg, parsed, worker, force, autoSwitched);
     }
@@ -530,16 +627,16 @@ function parseCode(code) {
   return { type: 'base', baseCode: code };
 }
 
-// ========== フェーズ1: 種別ごとの作業シート (v6) ==========
-// 1) 地点抽出シートでコード→地点(+上下)を解決
-// 2) 種別の作業シート (表層土壌 / 配管・ピット・盛土下) で地点(+上下)の行を探す
-// 3) 該当工程の時刻/担当列に書込み
-function handlePhase1(ss, kind, mode, cfg, baseCode, worker, force, autoSwitched) {
+// ========== フェーズ1: 種別ごとの作業シート (v7) ==========
+// 1) 地点抽出シートでコード→地点(+上下+状態)を解決 (または事前に解決済みを受取)
+// 2) 種別の作業シート で地点(+上下)の行を探す
+// 3) 該当工程の時刻/担当列に書込み (状態=削除なら赤文字)
+function handlePhase1(ss, kind, mode, cfg, baseCode, worker, force, autoSwitched, isDeleted, preResolved) {
   const kc = KIND_CONFIG[kind];
   if (!kc) return { ok: false, message: '未対応の種別: ' + kind };
 
-  // (1) コード解決
-  const resolved = resolveBaseCode_(ss, kind, baseCode);
+  // (1) コード解決 (handleScan側で済んでいれば preResolved を再利用)
+  const resolved = preResolved || resolveBaseCode_(ss, kind, baseCode);
   if (!resolved) {
     return { ok: false, message: 'コード ' + baseCode + ' が ' + kind + ' に見つかりません (地点抽出シートを確認してください)' };
   }
@@ -616,11 +713,17 @@ function handlePhase1(ss, kind, mode, cfg, baseCode, worker, force, autoSwitched
     }
   }
 
-  // 書込
+  // 書込 (削除地点なら赤文字、通常は黒)
   const now = new Date();
+  const fontColor = isDeleted ? DELETED_FONT_COLOR : null;
   targetCell.setValue(now);
   targetCell.setNumberFormat('yyyy/MM/dd HH:mm');
-  sheet.getRange(foundRow, workerCol).setValue(worker);
+  if (fontColor) targetCell.setFontColor(fontColor);
+  else targetCell.setFontColor(null);
+  const workerCell = sheet.getRange(foundRow, workerCol);
+  workerCell.setValue(worker);
+  if (fontColor) workerCell.setFontColor(fontColor);
+  else workerCell.setFontColor(null);
 
   // 日報シートに追記 (受入/風乾のみ)
   try {
@@ -650,11 +753,14 @@ function handlePhase1(ss, kind, mode, cfg, baseCode, worker, force, autoSwitched
   }
 
   const udDispMsg = kc.hasUd ? '(' + udDisplay(ud) + ')' : '';
+  const delTag = isDeleted ? ' [削除地点・赤文字]' : '';
   return {
     ok: true,
-    message: mode + ' 記録完了: ' + point + udDispMsg + ' 担当:' + worker + mergeNote,
+    message: mode + ' 記録完了: ' + point + udDispMsg + ' 担当:' + worker + mergeNote + delTag,
+    kind: kind,
     mode: mode, autoMode: autoSwitched ? mode : null,
     point: point, ud: ud, worker: worker,
+    isDeleted: isDeleted,
     time: Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm:ss')
   };
 }

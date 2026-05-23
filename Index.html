@@ -172,16 +172,16 @@
     cursor: pointer;
   }
 
-  /* 種別 (v6新規) */
+  /* 種別 (v7: 自動判別 + 3種別) */
   .kinds {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 6px;
     margin-bottom: 12px;
   }
   .kind-btn {
-    padding: 14px 8px;
-    font-size: 14px;
+    padding: 12px 4px;
+    font-size: 13px;
     font-weight: bold;
     border: 2px solid #888;
     border-radius: 8px;
@@ -195,6 +195,10 @@
     background: #00695c;
     color: #fff;
     border-color: #004d40;
+  }
+  .kind-btn[data-kind="auto"].active {
+    background: #1976d2;
+    border-color: #0d47a1;
   }
 
   /* モード */
@@ -578,9 +582,11 @@
     </div>
   </div>
 
-  <div class="section-label">種別</div>
+  <div class="section-label">種別（デフォルト=自動判別。手動指定したい時のみ選択）</div>
   <div class="kinds">
+    <button class="kind-btn active" data-kind="auto">🤖 自動判別</button>
     <button class="kind-btn" data-kind="表層土壌">表層土壌</button>
+    <button class="kind-btn" data-kind="土壌ガス">土壌ガス</button>
     <button class="kind-btn" data-kind="配管・ピット・盛土下">配管・ピット・盛土下</button>
   </div>
 
@@ -653,6 +659,19 @@
       <div class="modal-buttons">
         <button class="cancel" id="confirmCancel">キャンセル</button>
         <button class="ok"     id="confirmOk">記録する</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 削除地点 確認ダイアログ (v7: 案C 赤文字記録) -->
+  <div id="deletedConfirmMask" class="modal-mask">
+    <div class="modal">
+      <h3 style="color:#c62828;">⚠ 削除地点への記録</h3>
+      <p id="deletedConfirmMsg"></p>
+      <p style="font-size:12px;color:#c62828;margin:6px 0 0 0;">※ 記録した時刻と担当者は <strong>赤文字</strong> で書き込まれます。</p>
+      <div class="modal-buttons">
+        <button class="cancel" id="deletedConfirmCancel">キャンセル</button>
+        <button class="ok"     id="deletedConfirmOk" style="background:#c62828;">赤文字で記録</button>
       </div>
     </div>
   </div>
@@ -753,17 +772,19 @@
   }
 
   let currentMode = null;
-  let currentKind = null;  // v6: '表層土壌' / '配管・ピット・盛土下'
+  let currentKind = 'auto';  // v7: 'auto'(既定) / '表層土壌' / '土壌ガス' / '配管・ピット・盛土下'
   let currentWorker = '';
   const history = [];
   const HISTORY_MAX = 10;
-  let pendingConfirm = null; // {mode, code, kind}
+  let pendingConfirm = null; // {mode, code, kind, confirmDeleted}
 
-  // 種別を端末ごとに記憶 (現場切替時はリセットせず維持)
-  const LS_KIND = 'lab_kanri_kind';
+  // 種別を端末ごとに記憶 (既定は 'auto')
+  const LS_KIND = 'lab_kanri_kind_v7';
+  const VALID_KINDS = ['auto', '表層土壌', '土壌ガス', '配管・ピット・盛土下'];
   function setKind(kind) {
-    currentKind = kind || null;
-    if (kind) localStorage.setItem(LS_KIND, kind);
+    if (VALID_KINDS.indexOf(kind) < 0) kind = 'auto';
+    currentKind = kind;
+    localStorage.setItem(LS_KIND, kind);
     document.querySelectorAll('.kind-btn').forEach(function(b) {
       b.classList.toggle('active', b.dataset.kind === kind);
     });
@@ -771,11 +792,16 @@
   }
   function loadKindFromStorage() {
     const k = localStorage.getItem(LS_KIND);
-    if (k === '表層土壌' || k === '配管・ピット・盛土下') setKind(k);
+    setKind(VALID_KINDS.indexOf(k) >= 0 ? k : 'auto');
   }
   function updateKindLabel() {
     const el = document.getElementById('currentKind');
-    if (el) el.textContent = currentKind ? '種別: ' + currentKind : '';
+    if (!el) return;
+    if (currentKind === 'auto') {
+      el.textContent = '種別: 🤖 自動判別';
+    } else {
+      el.textContent = '種別: ' + currentKind;
+    }
   }
 
   // バッチ関連の状態(先頭で初期化しておく)
@@ -1016,7 +1042,8 @@
   function isAnyModalOpen() {
     return document.getElementById('confirmMask').classList.contains('show')
         || document.getElementById('siteSwitchMask').classList.contains('show')
-        || document.getElementById('pwdChangeMask').classList.contains('show');
+        || document.getElementById('pwdChangeMask').classList.contains('show')
+        || document.getElementById('deletedConfirmMask').classList.contains('show');
   }
   function focusInput() {
     if (isAnyModalOpen()) return;
@@ -1240,23 +1267,23 @@
     focusInput();
   });
 
-  function submitScan(mode, code, force) {
+  function submitScan(mode, code, force, confirmDeleted) {
     if (!requireSpreadsheet()) return;
     setResult('idle', '送信中... ' + code);
     google.script.run
       .withSuccessHandler(onScanResult)
       .withFailureHandler(onScanError)
-      .handleScan(getCurrentSpreadsheetId(), currentKind || '', mode, code, !!force);
+      .handleScan(getCurrentSpreadsheetId(), currentKind || 'auto', mode, code, !!force, '', !!confirmDeleted);
   }
 
   // ろかモード2段スキャン用：1個目（ろか）を取得した時点の担当者で記録する
-  function submitScanWithWorker(mode, code, force, overrideWorker) {
+  function submitScanWithWorker(mode, code, force, overrideWorker, confirmDeleted) {
     if (!requireSpreadsheet()) return;
     setResult('idle', '送信中... ' + code);
     google.script.run
       .withSuccessHandler(onScanResult)
       .withFailureHandler(onScanError)
-      .handleScan(getCurrentSpreadsheetId(), currentKind || '', mode, code, !!force, overrideWorker || '');
+      .handleScan(getCurrentSpreadsheetId(), currentKind || 'auto', mode, code, !!force, overrideWorker || '', !!confirmDeleted);
   }
 
   function onScanResult(res) {
@@ -1265,8 +1292,16 @@
       if (res.autoMode) setMode(res.autoMode);
       else if (res.mode) setMode(res.mode);
       setResult('ok', res.message, res.time);
-      addHistory('ok', res.message);
+      addHistory(res.isDeleted ? 'warn' : 'ok', res.message);
       beep(true);
+    } else if (res.needConfirm === 'deleted') {
+      // 削除地点ダイアログ (案C: 警告 → OKで赤文字記録)
+      pendingConfirm = { mode: res.mode, code: res.code, kind: res.kind, confirmDeleted: true };
+      if (res.autoMode) setMode(res.autoMode);
+      document.getElementById('deletedConfirmMsg').textContent = res.message;
+      document.getElementById('deletedConfirmMask').classList.add('show');
+      setResult('warn', res.message);
+      beep(false);
     } else if (res.needConfirm) {
       // 順番警告 → ダイアログ
       pendingConfirm = { mode: res.mode, code: res.code };
@@ -1300,6 +1335,26 @@
   });
   document.getElementById('confirmCancel').addEventListener('click', () => {
     document.getElementById('confirmMask').classList.remove('show');
+    pendingConfirm = null;
+    setResult('idle', 'キャンセルしました');
+    focusInput();
+  });
+
+  // ---- 削除地点 確認ダイアログ (v7) ----
+  document.getElementById('deletedConfirmOk').addEventListener('click', () => {
+    document.getElementById('deletedConfirmMask').classList.remove('show');
+    if (pendingConfirm && pendingConfirm.confirmDeleted) {
+      const pc = pendingConfirm;
+      pendingConfirm = null;
+      // 種別を一時的に判定済みのkindに固定して送信 (auto時の再判定を省く)
+      const savedKind = currentKind;
+      if (pc.kind) currentKind = pc.kind;
+      submitScan(pc.mode, pc.code, false, /* confirmDeleted= */ true);
+      currentKind = savedKind;
+    }
+  });
+  document.getElementById('deletedConfirmCancel').addEventListener('click', () => {
+    document.getElementById('deletedConfirmMask').classList.remove('show');
     pendingConfirm = null;
     setResult('idle', 'キャンセルしました');
     focusInput();
@@ -1690,7 +1745,7 @@
     focusInput();
   }
 
-  function runScanPromise(mode, code, force) {
+  function runScanPromise(mode, code, force, confirmDeleted) {
     return new Promise(resolve => {
       if (!getCurrentSpreadsheetId()) {
         resolve({ ok: false, message: '現場が未設定です。「現場切替」から設定してください' });
@@ -1699,7 +1754,7 @@
       google.script.run
         .withSuccessHandler(resolve)
         .withFailureHandler(e => resolve({ ok: false, message: '通信エラー: ' + e.message }))
-        .handleScan(getCurrentSpreadsheetId(), currentKind || '', mode, code, !!force);
+        .handleScan(getCurrentSpreadsheetId(), currentKind || 'auto', mode, code, !!force, '', !!confirmDeleted);
     });
   }
 
