@@ -730,21 +730,23 @@ function handlePhase1(ss, kind, mode, cfg, baseCode, worker, force, autoSwitched
   if (fontColor) workerCell.setFontColor(fontColor);
   else workerCell.setFontColor(null);
 
-  // 日報シートに追記 (受入/風乾/振り/ろか/採取のうち対象モードのみ)
-  // 日報B列: 表層土壌=上下、配管下=採取深度、土壌ガス=空
-  try {
-    let dailyBCol = '';
-    if (kc.hasUd) {
-      dailyBCol = udDisplay(ud);
-    } else if (kind === '配管・ピット・盛土下' && kc.workCols.DEPTH) {
-      // 配管下は書込先シートのC列(DEPTH)から採取深度を取得
-      try {
-        const d = sheet.getRange(foundRow, kc.workCols.DEPTH).getDisplayValue();
-        dailyBCol = String(d || '').trim();
-      } catch (e) {}
-    }
-    logToDailyReport(ss, mode, point, dailyBCol, worker, now);
-  } catch (e) {}
+  // 日報シートに追記 (土壌ガスは除外)
+  // 日報B列: 表層土壌=上下、配管下=採取深度
+  if (kind !== '土壌ガス') {
+    try {
+      let dailyBCol = '';
+      if (kc.hasUd) {
+        dailyBCol = udDisplay(ud);
+      } else if (kind === '配管・ピット・盛土下' && kc.workCols.DEPTH) {
+        // 配管下は書込先シートのC列(DEPTH)から採取深度を取得
+        try {
+          const d = sheet.getRange(foundRow, kc.workCols.DEPTH).getDisplayValue();
+          dailyBCol = String(d || '').trim();
+        } catch (e) {}
+      }
+      logToDailyReport(ss, mode, point, dailyBCol, worker, now);
+    } catch (e) {}
+  }
 
   // 風乾完了 → 上下揃いチェック → M列追加 (表層土壌のみ。配管下は上下なしのため別ロジック)
   let mergeNote = '';
