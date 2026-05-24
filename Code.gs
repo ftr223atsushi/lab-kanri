@@ -158,6 +158,19 @@ const KIND_CONFIG = {
 // 自動判別時の検索順序 (1コード=1種別前提、最初にヒットしたら確定)
 const KIND_AUTO_ORDER = ['表層土壌', '土壌ガス', '配管・ピット・盛土下'];
 
+// v7.2: UI上の種別 (soil/gas) → 内部種別配列のマッピング
+// 「土壌」モードは表層土壌・配管下を内部で自動判別する
+const KIND_GROUPS = {
+  'soil': ['表層土壌', '配管・ピット・盛土下'],
+  'gas':  ['土壌ガス']
+};
+
+// 範囲外コード検出時の親切エラーメッセージ用 (UI種別への逆引き)
+function uiKindLabelOf_(internalKind) {
+  if (internalKind === '土壌ガス') return 'ガス';
+  return '土壌';
+}
+
 // 削除地点を赤文字で記録するための色
 const DELETED_FONT_COLOR = '#c62828';
 
@@ -344,16 +357,17 @@ function resolveBaseCode_(ss, kind, baseCode) {
 }
 
 /**
- * コードから種別を自動判別。地点抽出シートの全種別ブロックを順に検索し、
- * 最初にヒットした種別を返す。
+ * コードから種別を自動判別。地点抽出シートを順に検索し、最初にヒットした種別を返す。
  *
  * @param {Spreadsheet} ss
  * @param {string} baseCode
+ * @param {string[]} [allowedKinds] 検索対象の内部種別配列 (省略時は全種別)
  * @return {Object|null} { kind, point, ud, status } または null
  */
-function autoDetectKind_(ss, baseCode) {
-  for (let i = 0; i < KIND_AUTO_ORDER.length; i++) {
-    const kind = KIND_AUTO_ORDER[i];
+function autoDetectKind_(ss, baseCode, allowedKinds) {
+  const list = (allowedKinds && allowedKinds.length) ? allowedKinds : KIND_AUTO_ORDER;
+  for (let i = 0; i < list.length; i++) {
+    const kind = list[i];
     try {
       const resolved = resolveBaseCode_(ss, kind, baseCode);
       if (resolved) return Object.assign({ kind: kind }, resolved);
@@ -581,28 +595,37 @@ function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker, conf
     if (effectivePhase === 1) {
       let effectiveKind = kind;
       let preResolved = null;
-      if (!effectiveKind || effectiveKind === 'auto') {
-        preResolved = autoDetectKind_(ss, parsed.baseCode);
-        if (!preResolved) {
-          return {
-            ok: false,
-            message: 'コード ' + parsed.baseCode + ' が地点抽出シートのどの種別にも見つかりません'
-          };
-        }
-        effectiveKind = preResolved.kind;
+
+      // v7.2: UI種別 (soil/gas) → 内部種別配列マッピング
+      // 'auto' は互換用 (旧UI)、空文字も含めて全種別検索扱い
+      let searchKinds;
+      if (kind === 'soil' || kind === 'gas') {
+        searchKinds = KIND_GROUPS[kind];
+      } else if (kind && KIND_CONFIG[kind]) {
+        // 旧仕様の直接指定 (互換用)
+        searchKinds = [kind];
       } else {
-        if (!KIND_CONFIG[effectiveKind]) {
-          return { ok: false, message: '未対応の種別: ' + effectiveKind };
-        }
-        preResolved = resolveBaseCode_(ss, effectiveKind, parsed.baseCode);
-        if (!preResolved) {
+        // 'auto' or 空文字 or 不明 → 全種別 (互換)
+        searchKinds = KIND_AUTO_ORDER;
+      }
+
+      preResolved = autoDetectKind_(ss, parsed.baseCode, searchKinds);
+      if (!preResolved) {
+        // 検索範囲外でヒットしないか確認 → 種別ボタン切替を促す親切エラー
+        const allOther = autoDetectKind_(ss, parsed.baseCode);
+        if (allOther && searchKinds.indexOf(allOther.kind) < 0) {
           return {
             ok: false,
-            message: 'コード ' + parsed.baseCode + ' が「' + effectiveKind + '」に見つかりません'
+            message: 'このコードは「' + allOther.kind + '」のものです。' +
+                     '種別ボタンを「' + uiKindLabelOf_(allOther.kind) + '」に切り替えてください'
           };
         }
-        preResolved.kind = effectiveKind;
+        return {
+          ok: false,
+          message: 'コード ' + parsed.baseCode + ' が地点抽出シートに見つかりません'
+        };
       }
+      effectiveKind = preResolved.kind;
 
       const kc = KIND_CONFIG[effectiveKind];
 

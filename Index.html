@@ -172,16 +172,16 @@
     cursor: pointer;
   }
 
-  /* 種別 (v7: 自動判別 + 3種別) */
+  /* 種別 (v7.2: 土壌 / ガス の2分類) */
   .kinds {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(2, 1fr);
     gap: 6px;
     margin-bottom: 12px;
   }
   .kind-btn {
-    padding: 12px 4px;
-    font-size: 13px;
+    padding: 14px 8px;
+    font-size: 15px;
     font-weight: bold;
     border: 2px solid #888;
     border-radius: 8px;
@@ -191,14 +191,15 @@
     user-select: none;
     -webkit-tap-highlight-color: transparent;
   }
-  .kind-btn.active {
-    background: #00695c;
+  .kind-btn[data-kind="soil"].active {
+    background: #6d4c41;
     color: #fff;
-    border-color: #004d40;
+    border-color: #4e342e;
   }
-  .kind-btn[data-kind="auto"].active {
-    background: #1976d2;
-    border-color: #0d47a1;
+  .kind-btn[data-kind="gas"].active {
+    background: #2e7d32;
+    color: #fff;
+    border-color: #1b5e20;
   }
 
   /* モード */
@@ -583,15 +584,13 @@
     </div>
   </div>
 
-  <div class="section-label">種別（デフォルト=自動判別。手動指定したい時のみ選択）</div>
+  <div class="section-label">種別</div>
   <div class="kinds">
-    <button class="kind-btn active" data-kind="auto">🤖 自動判別</button>
-    <button class="kind-btn" data-kind="表層土壌">表層土壌</button>
-    <button class="kind-btn" data-kind="土壌ガス">土壌ガス</button>
-    <button class="kind-btn" data-kind="配管・ピット・盛土下">配管・ピット・盛土下</button>
+    <button class="kind-btn active" data-kind="soil">🟤 土壌</button>
+    <button class="kind-btn" data-kind="gas">🟢 ガス</button>
   </div>
 
-  <div class="section-label">工程モード（削孔・採取・分析の使用可否は種別で異なります）</div>
+  <div class="section-label">工程モード</div>
   <div class="modes">
     <button class="mode-btn" data-mode="削孔">削孔</button>
     <button class="mode-btn" data-mode="採取">採取</button>
@@ -774,36 +773,56 @@
   }
 
   let currentMode = null;
-  let currentKind = 'auto';  // v7: 'auto'(既定) / '表層土壌' / '土壌ガス' / '配管・ピット・盛土下'
+  let currentKind = 'soil';  // v7.2: 'soil'(既定) / 'gas'
   let currentWorker = '';
   const history = [];
   const HISTORY_MAX = 10;
   let pendingConfirm = null; // {mode, code, kind, confirmDeleted}
 
-  // 種別を端末ごとに記憶 (既定は 'auto')
-  const LS_KIND = 'lab_kanri_kind_v7';
-  const VALID_KINDS = ['auto', '表層土壌', '土壌ガス', '配管・ピット・盛土下'];
+  // 種別ごとに表示する工程モード (種別変更時に動的切替)
+  const KIND_MODES = {
+    'soil': ['採取', '受入', '風乾', '振り', 'ろか', '分析'],
+    'gas':  ['削孔', '採取', '受入', '分析']
+  };
+  const KIND_LABELS = {
+    'soil': '🟤 土壌',
+    'gas':  '🟢 ガス'
+  };
+
+  // 種別を端末ごとに記憶 (既定は 'soil')
+  const LS_KIND = 'lab_kanri_kind_v72';
+  const VALID_KINDS = ['soil', 'gas'];
   function setKind(kind) {
-    if (VALID_KINDS.indexOf(kind) < 0) kind = 'auto';
+    if (VALID_KINDS.indexOf(kind) < 0) kind = 'soil';
+    const changed = (currentKind !== kind);
     currentKind = kind;
     localStorage.setItem(LS_KIND, kind);
     document.querySelectorAll('.kind-btn').forEach(function(b) {
       b.classList.toggle('active', b.dataset.kind === kind);
     });
+    // 工程モードボタンを種別に応じて表示/非表示
+    const availableModes = KIND_MODES[kind] || [];
+    document.querySelectorAll('.mode-btn').forEach(function(b) {
+      const show = availableModes.indexOf(b.dataset.mode) >= 0;
+      b.style.display = show ? '' : 'none';
+    });
+    // grid列数を表示中のモード数に合わせる
+    const modesEl = document.querySelector('.modes');
+    if (modesEl) modesEl.style.gridTemplateColumns = 'repeat(' + availableModes.length + ', 1fr)';
+    // 種別変更で 現モードが使えなくなったらリセット
+    if (changed && currentMode && availableModes.indexOf(currentMode) < 0) {
+      setMode(null);
+    }
     updateKindLabel();
   }
   function loadKindFromStorage() {
     const k = localStorage.getItem(LS_KIND);
-    setKind(VALID_KINDS.indexOf(k) >= 0 ? k : 'auto');
+    setKind(VALID_KINDS.indexOf(k) >= 0 ? k : 'soil');
   }
   function updateKindLabel() {
     const el = document.getElementById('currentKind');
     if (!el) return;
-    if (currentKind === 'auto') {
-      el.textContent = '種別: 🤖 自動判別';
-    } else {
-      el.textContent = '種別: ' + currentKind;
-    }
+    el.textContent = '種別: ' + (KIND_LABELS[currentKind] || currentKind);
   }
 
   // バッチ関連の状態(先頭で初期化しておく)
