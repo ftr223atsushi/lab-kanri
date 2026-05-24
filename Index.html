@@ -204,7 +204,7 @@
   /* モード */
   .modes {
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(7, 1fr);
     gap: 6px;
     margin-bottom: 12px;
   }
@@ -225,6 +225,7 @@
     color: #fff;
     border-color: #1b5e20;
   }
+  .mode-btn[data-mode="削孔"].active { background: #6d4c41; border-color: #4e342e; }
   .mode-btn[data-mode="採取"].active { background: #ef6c00; border-color: #e65100; }
   .mode-btn[data-mode="受入"].active { background: #1565c0; border-color: #0d47a1; }
   .mode-btn[data-mode="分析"].active { background: #c62828; border-color: #b71c1c; }
@@ -590,8 +591,9 @@
     <button class="kind-btn" data-kind="配管・ピット・盛土下">配管・ピット・盛土下</button>
   </div>
 
-  <div class="section-label">工程モード</div>
+  <div class="section-label">工程モード（削孔・採取・分析の使用可否は種別で異なります）</div>
   <div class="modes">
+    <button class="mode-btn" data-mode="削孔">削孔</button>
     <button class="mode-btn" data-mode="採取">採取</button>
     <button class="mode-btn" data-mode="受入">受入</button>
     <button class="mode-btn" data-mode="風乾">風乾</button>

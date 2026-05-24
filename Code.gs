@@ -97,6 +97,7 @@ const KIND_CONFIG = {
     pickupCodeCol:   4,  // 地点抽出 D列
     workSheet:       SHEET_HYOSO,
     hasUd:           true,
+    availableModes: ['採取', '受入', '風乾', '振り', 'ろか', '分析'],
     // 書込先シート: A=状態 B=地点 C=上下 D=採取 E=採取担当 F=受入 G=受入担当 H=風乾 I=風乾担当
     workCols: {
       STATUS:   1, POINT: 2, UD: 3,
@@ -112,16 +113,27 @@ const KIND_CONFIG = {
     pickupCodeCol:   7,  // 地点抽出 G列
     workSheet:       SHEET_GAS,
     hasUd:           false,
-    // 土壌ガスは「受入」モードのみ shast-kanri で扱う
-    availableModes: ['受入'],
-    // 書込先シート: A=状態 B=地点名 C=削孔時間 D=採取時間 E=受入 F=担当者
-    // shast-kanri は E列(受入) と F列(担当者) のみ書込。SAISHU は意図的に未定義
-    // (MODES['受入'].prevCol='SAISHU' のチェックを skip させる)
+    // v7.1: 4工程対応 (削孔/採取/受入/分析)
+    availableModes: ['削孔', '採取', '受入', '分析'],
+    // 種別固有の順番チェック (MODESの prevCol を上書き)
+    //   削孔: 先頭 (チェックなし)
+    //   採取: 削孔が前 (削孔→採取はワンセット)
+    //   受入: 単独可 (削孔/採取スキップして受入スタート可)
+    //   分析: 受入が前 (受入→分析はワンセット)
+    modeOverrides: {
+      '削孔': { prevCol: null },
+      '採取': { prevCol: 'SAKKO_T' },
+      '受入': { prevCol: null },
+      '分析': { prevCol: 'UKEIRE' }
+    },
+    // 書込先シート: A=状態 B=地点名 C=削孔日時 D=削孔担当 E=採取日時 F=採取担当
+    //                G=受入日時 H=担当者(=受入担当) I=分析日時 J=分析担当
     workCols: {
-      STATUS:   1, POINT: 2,
-      SAKKO:    3,   // C列 削孔時間 (shast-kanriは触らない)
-      // SAISHU は未定義 → handlePhase1 の順番チェックが skip される
-      UKEIRE:   5, UKEIRE_W: 6   // E,F (shast-kanriが書込)
+      STATUS:    1, POINT: 2,
+      SAKKO_T:   3, SAKKO_W:   4,    // C,D
+      SAISHU:    5, SAISHU_W:  6,    // E,F
+      UKEIRE:    7, UKEIRE_W:  8,    // G,H
+      BUNSEKI_T: 9, BUNSEKI_W: 10    // I,J
     }
   },
   '配管・ピット・盛土下': {
@@ -131,6 +143,7 @@ const KIND_CONFIG = {
     pickupCodeCol:   11,  // 地点抽出 K列
     workSheet:       SHEET_HAIKAN,
     hasUd:           false,
+    availableModes: ['採取', '受入', '風乾', '振り', 'ろか', '分析'],
     // 書込先シート: A=状態 B=地点 C=採取深度 D=採取 E=採取担当 F=受入 G=受入担当 H=風乾 I=風乾担当
     workCols: {
       STATUS:   1, POINT: 2,
@@ -182,6 +195,12 @@ const COL_BUNSEKI = {
 // phase1 modes: 工程時刻シートに書込(地点+上下)
 // phase2 modes: 前処理/分析シートに書込(地点+色)
 const MODES = {
+  // v7.1: 土壌ガス専用工程「削孔」(他種別では availableModes で弾く)
+  '削孔': {
+    phase: 1,
+    col: 'SAKKO_T', workerCol: 'SAKKO_W',
+    prevCol: null, strict: false
+  },
   '採取': {
     phase: 1,
     col: 'SAISHU', workerCol: 'SAISHU_W',
@@ -550,9 +569,16 @@ function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker, conf
       return { ok: false, message: '分析モードは ' + cfg.requireWorkers.join('・') + ' のみ使用できます (現在: ' + worker + ')' };
     }
 
-    // フェーズ別処理
-    if (cfg.phase === 1) {
-      // v7: kind が 'auto' or '' なら地点抽出シートで自動判別
+    // v7.1: 分析モードは「コード種別 (base/sub)」で phase を決める
+    //   - baseコード → phase=1 (土壌ガスシートに直接書込)
+    //   - -roka コード → phase=2 (前処理シート、既存ロジック)
+    // 他モードは MODES の phase をそのまま使う。
+    let effectivePhase = cfg.phase;
+    if (effectiveMode === '分析') {
+      effectivePhase = (parsed.type === 'base') ? 1 : 2;
+    }
+
+    if (effectivePhase === 1) {
       let effectiveKind = kind;
       let preResolved = null;
       if (!effectiveKind || effectiveKind === 'auto') {
@@ -580,15 +606,15 @@ function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker, conf
 
       const kc = KIND_CONFIG[effectiveKind];
 
-      // 土壌ガス等、availableModes が定義されている種別は工程を制限
+      // availableModes チェック (例: 表層・配管で削孔モード、土壌ガスで風乾/振り/ろか)
       if (kc.availableModes && kc.availableModes.indexOf(effectiveMode) < 0) {
         return {
           ok: false,
-          message: '「' + effectiveKind + '」では「' + effectiveMode + '」モードは使えません。使用可: ' + kc.availableModes.join('/')
+          message: '「' + effectiveKind + '」では「' + effectiveMode + '」モードは使えません。使用可: ' + kc.availableModes.join(' / ')
         };
       }
 
-      // 状態=削除 の確認 (案C: 警告ダイアログ → 確認後に赤文字で記録)
+      // 状態=削除 の確認
       if (preResolved.status === '削除' && !confirmDeleted) {
         return {
           ok: false,
@@ -606,6 +632,9 @@ function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker, conf
       const isDeleted = (preResolved.status === '削除');
       return handlePhase1(ss, effectiveKind, effectiveMode, cfg, parsed.baseCode, worker, force, autoSwitched, isDeleted, preResolved);
     } else {
+      // phase=2: 振り/ろか/分析 (前処理シート)
+      // ただし、kind が明示的に「土壌ガス」指定で分析モードなら、ここに来ない想定
+      // (土壌ガスの分析は base コード経由で phase=1 ルートで処理されるべき)
       return handlePhase2or3(ss, effectiveMode, cfg, parsed, worker, force, autoSwitched);
     }
 
@@ -697,13 +726,20 @@ function handlePhase1(ss, kind, mode, cfg, baseCode, worker, force, autoSwitched
     };
   }
 
-  // 順番チェック
-  if (cfg.prevCol) {
-    const prevCol = kc.workCols[cfg.prevCol];
+  // 順番チェック (種別固有の modeOverrides があれば優先)
+  // 例: 土壌ガス '採取' は prevCol='SAKKO_T' (削孔が前) に上書き
+  //     土壌ガス '受入' は prevCol=null に上書き (単独可)
+  //     土壌ガス '分析' は prevCol='UKEIRE' に上書き (受入が前)
+  const modeOverride = (kc.modeOverrides && kc.modeOverrides[mode]) || null;
+  const effectivePrevCol = (modeOverride && ('prevCol' in modeOverride))
+    ? modeOverride.prevCol
+    : cfg.prevCol;
+  if (effectivePrevCol) {
+    const prevCol = kc.workCols[effectivePrevCol];
     if (prevCol) {
       const prevVal = sheet.getRange(foundRow, prevCol).getValue();
       if (!prevVal) {
-        const prevName = phase1ColName(cfg.prevCol);
+        const prevName = phase1ColName(effectivePrevCol);
         if (cfg.strict) {
           return { ok: false, message: prevName + ' が未記録です。先に ' + prevName + ' を記録してください' };
         } else if (!force) {
@@ -791,9 +827,11 @@ function udNormalize(ud) {
 
 function phase1ColName(colKey) {
   switch (colKey) {
-    case 'SAISHU': return '採取';
-    case 'UKEIRE': return '受入';
-    case 'FUKAN':  return '風乾';
+    case 'SAKKO_T':   return '削孔';
+    case 'SAISHU':    return '採取';
+    case 'UKEIRE':    return '受入';
+    case 'FUKAN':     return '風乾';
+    case 'BUNSEKI_T': return '分析';
     default: return colKey;
   }
 }
