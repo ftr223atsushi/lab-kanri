@@ -36,7 +36,9 @@
 const SHEET_CHITEN      = '地点抽出';
 const SHEET_HYOSO       = '表層土壌';
 const SHEET_HAIKAN      = '配管・ピット・盛土下';
-const SHEET_GAS         = '土壌ガス';        // v6時点では未対応 (UIに種別ボタン出さない)
+const SHEET_GAS         = '土壌ガス';
+const SHEET_FUKADO      = '深度調査';     // v7.3 追加
+const SHEET_CHIKASUI    = '地下水';       // v7.3 追加
 const SHEET_ZENSHORI    = '前処理';
 const SHEET_BUNSEKI     = '分析';
 const SHEET_BARCODE_GEN = 'バーコード作成';
@@ -152,16 +154,56 @@ const KIND_CONFIG = {
       UKEIRE:   6, UKEIRE_W: 7,   // F,G
       FUKAN:    8, FUKAN_W:  9    // H,I
     }
+  },
+  '深度調査': {
+    // v7.3 新規: 地点抽出シート L〜O列
+    //   L=状態 M=地点 N=深度 O=コード
+    pickupStatusCol: 12,  // L列
+    pickupPointCol:  13,  // M列
+    pickupDepthCol:  14,  // N列 (深度調査専用)
+    pickupCodeCol:   15,  // O列
+    pickupUdCol:     null,
+    workSheet:       SHEET_FUKADO,
+    hasUd:           false,
+    hasDepth:        true,  // 地点+深度 で行検索
+    availableModes: ['採取', '受入', '風乾'],
+    // 書込先シート: A=状態 B=地点 C=深度 D=採取 E=採取担当 F=受入 G=受入担当 H=風乾 I=風乾担当
+    workCols: {
+      STATUS:   1, POINT: 2, DEPTH: 3,
+      SAISHU:   4, SAISHU_W: 5,   // D,E
+      UKEIRE:   6, UKEIRE_W: 7,   // F,G
+      FUKAN:    8, FUKAN_W:  9    // H,I
+    }
+  },
+  '地下水': {
+    // v7.3 新規: 地点抽出シート P〜T列
+    //   P=状態 Q=地点 R=水位 S=容器の種類 T=コード
+    pickupStatusCol: 16,  // P列
+    pickupPointCol:  17,  // Q列
+    pickupUdCol:     null,
+    pickupCodeCol:   20,  // T列
+    workSheet:       SHEET_CHIKASUI,
+    hasUd:           false,
+    // 地下水は受入のみ
+    availableModes: ['受入'],
+    // 書込先シート: A=状態 B=地点 C=水位 D=容器の種類 E=受け入れ F=受け入れ担
+    // shast-kanri は E列(受入) と F列(担当) のみ書込。水位/容器の種類は触らない
+    workCols: {
+      STATUS:   1, POINT: 2,
+      SUI:      3,  // C列 水位 (shast-kanriは触らない)
+      YOKI:     4,  // D列 容器の種類 (shast-kanriは触らない)
+      UKEIRE:   5, UKEIRE_W: 6   // E,F (shast-kanriが書込)
+    }
   }
 };
 
 // 自動判別時の検索順序 (1コード=1種別前提、最初にヒットしたら確定)
-const KIND_AUTO_ORDER = ['表層土壌', '土壌ガス', '配管・ピット・盛土下'];
+const KIND_AUTO_ORDER = ['表層土壌', '土壌ガス', '配管・ピット・盛土下', '深度調査', '地下水'];
 
-// v7.2: UI上の種別 (soil/gas) → 内部種別配列のマッピング
-// 「土壌」モードは表層土壌・配管下を内部で自動判別する
+// v7.2-v7.3: UI上の種別 (soil/gas) → 内部種別配列のマッピング
+// 「土壌」モードは 表層土壌・配管下・深度調査・地下水 を内部で自動判別する
 const KIND_GROUPS = {
-  'soil': ['表層土壌', '配管・ピット・盛土下'],
+  'soil': ['表層土壌', '配管・ピット・盛土下', '深度調査', '地下水'],
   'gas':  ['土壌ガス']
 };
 
@@ -321,10 +363,11 @@ function resolveBaseCode_(ss, kind, baseCode) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return null;
 
-  // 必要な列幅 (コード列まで、状態列含む)
+  // 必要な列幅 (コード列まで、状態列・深度列含む)
   const lastCol = Math.max(
     cfg.pickupCodeCol, cfg.pickupPointCol,
-    cfg.pickupUdCol || 0, cfg.pickupStatusCol || 0
+    cfg.pickupUdCol || 0, cfg.pickupStatusCol || 0,
+    cfg.pickupDepthCol || 0
   );
   const dispRange = sheet.getRange(2, 1, lastRow - 1, lastCol).getDisplayValues();
   const valRange  = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
@@ -350,7 +393,10 @@ function resolveBaseCode_(ss, kind, baseCode) {
         ? String(valRange[i][cfg.pickupUdCol - 1]).trim() : '';
       const status = cfg.pickupStatusCol
         ? String(valRange[i][cfg.pickupStatusCol - 1]).trim() : '';
-      return { point: point, ud: ud, status: status };
+      // 深度調査の場合のみ depth に値が入る
+      const depth  = cfg.pickupDepthCol
+        ? String(dispRange[i][cfg.pickupDepthCol - 1]).trim() : '';
+      return { point: point, ud: ud, status: status, depth: depth };
     }
   }
   return null;
@@ -712,7 +758,11 @@ function handlePhase1(ss, kind, mode, cfg, baseCode, worker, force, autoSwitched
     return { ok: false, message: '「' + kc.workSheet + '」シートにデータがありません (地点が展開されているか確認してください)' };
   }
 
-  const numCols = kc.hasUd ? 2 : 1;
+  // 行検索: 種別ごとにキー列が違う
+  //   - 表層土壌 (hasUd):   地点 + 上下
+  //   - 深度調査 (hasDepth): 地点 + 深度
+  //   - その他:              地点のみ
+  const numCols = kc.hasUd ? 2 : (kc.hasDepth ? 2 : 1);
   const data = sheet.getRange(2, kc.workCols.POINT, lastRow - 1, numCols).getValues();
   let foundRow = -1;
   for (let i = 0; i < data.length; i++) {
@@ -720,15 +770,19 @@ function handlePhase1(ss, kind, mode, cfg, baseCode, worker, force, autoSwitched
     if (p !== String(point).trim()) continue;
     if (kc.hasUd) {
       const u = String(data[i][1]).trim();
-      // ud は 上/下/up/down を許容
       if (udNormalize(u) === udNormalize(ud)) { foundRow = i + 2; break; }
+    } else if (kc.hasDepth) {
+      const d = String(data[i][1]).trim();
+      if (d === String(resolved.depth || '').trim()) { foundRow = i + 2; break; }
     } else {
       foundRow = i + 2; break;
     }
   }
   if (foundRow < 0) {
-    const udDisp = kc.hasUd ? '(' + udDisplay(ud) + ')' : '';
-    return { ok: false, message: kc.workSheet + 'シートに ' + point + udDisp + ' の行が見つかりません' };
+    let extra = '';
+    if (kc.hasUd)        extra = '(' + udDisplay(ud) + ')';
+    else if (kc.hasDepth) extra = '(深度:' + (resolved.depth || '') + ')';
+    return { ok: false, message: kc.workSheet + 'シートに ' + point + extra + ' の行が見つかりません' };
   }
 
   // (3) 該当工程の時刻/担当列
@@ -790,14 +844,14 @@ function handlePhase1(ss, kind, mode, cfg, baseCode, worker, force, autoSwitched
   else workerCell.setFontColor(null);
 
   // 日報シートに追記 (土壌ガスは除外)
-  // 日報B列: 表層土壌=上下、配管下=採取深度
+  // 日報B列: 表層土壌=上下、配管下/深度調査=深度、地下水=空
   if (kind !== '土壌ガス') {
     try {
       let dailyBCol = '';
       if (kc.hasUd) {
         dailyBCol = udDisplay(ud);
-      } else if (kind === '配管・ピット・盛土下' && kc.workCols.DEPTH) {
-        // 配管下は書込先シートのC列(DEPTH)から採取深度を取得
+      } else if (kc.workCols.DEPTH) {
+        // 配管下 or 深度調査: 書込先シートのDEPTH列から取得
         try {
           const d = sheet.getRange(foundRow, kc.workCols.DEPTH).getDisplayValue();
           dailyBCol = String(d || '').trim();
