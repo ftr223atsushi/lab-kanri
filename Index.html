@@ -680,7 +680,7 @@
   <!-- 追加入力ダイアログ (v7.4: 配管採取深度 / 地下水水位) -->
   <div id="extraInputMask" class="modal-mask">
     <div class="modal site-modal">
-      <h3 id="extraInputTitle" style="color:#00695c;">追加入力</h3>
+      <h3 id="extraInputTitle" style="color:#ef6c00;">⚠ 未入力</h3>
       <p id="extraInputDesc" style="font-size:13px;color:#666;margin:0 0 8px 0;"></p>
       <label for="extraInputValue" id="extraInputLabel">入力値</label>
       <input type="text" id="extraInputValue" inputmode="decimal" autocomplete="off">
@@ -1394,8 +1394,8 @@
 
   function openExtraInputDialog(info) {
     pendingExtra = info;
-    extraInputTitle.textContent = '📝 ' + info.label + ' 入力';
-    extraInputDesc.textContent  = info.point + ' の ' + info.label + ' を入力してください';
+    extraInputTitle.textContent = '⚠ ' + info.label + 'が未入力です';
+    extraInputDesc.textContent  = info.point + ' の ' + info.label + ' を入力してください（後で入れる場合はスキップ）';
     extraInputLabel.textContent = info.label;
     extraInputValue.value = '';
     extraInputError.textContent = '';

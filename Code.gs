@@ -143,11 +143,13 @@ const KIND_CONFIG = {
     pickupPointCol:  9,   // 地点抽出 I列
     pickupUdCol:     null,
     pickupCodeCol:   11,  // 地点抽出 K列
-    // v7.4: 採取深度を地点抽出シートJ列に入力 (採取モード時にダイアログ)
+    // v7.4: 採取深度を地点抽出シートJ列に入力 (採取/受入モード時にダイアログ)
+    //   - 採取時: 未入力なら入力促し
+    //   - 受入時: もう一度チャンス (まだ未入力なら入力促し、スキップ可能)
     pickupExtraCol:  10,  // J列 (採取深度)
-    pickupExtraLabel: '採取深度',
+    pickupExtraLabel: '深度',
     pickupExtraType: 'depth-range',  // "1.0" → "1.00-1.50m" (+0.5)
-    pickupExtraOnModes: ['採取'],     // どのモード時にダイアログを出すか
+    pickupExtraOnModes: ['採取', '受入'],
     workSheet:       SHEET_HAIKAN,
     hasUd:           false,
     availableModes: ['採取', '受入', '風乾', '振り', 'ろか', '分析'],
