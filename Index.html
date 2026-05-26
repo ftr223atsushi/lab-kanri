@@ -677,6 +677,22 @@
     </div>
   </div>
 
+  <!-- 追加入力ダイアログ (v7.4: 配管採取深度 / 地下水水位) -->
+  <div id="extraInputMask" class="modal-mask">
+    <div class="modal site-modal">
+      <h3 id="extraInputTitle" style="color:#00695c;">追加入力</h3>
+      <p id="extraInputDesc" style="font-size:13px;color:#666;margin:0 0 8px 0;"></p>
+      <label for="extraInputValue" id="extraInputLabel">入力値</label>
+      <input type="text" id="extraInputValue" inputmode="decimal" autocomplete="off">
+      <p id="extraInputHint" style="font-size:12px;color:#888;margin:6px 0 0 0;"></p>
+      <p id="extraInputError" class="modal-error"></p>
+      <div class="modal-buttons">
+        <button class="cancel" id="extraInputSkip">スキップ</button>
+        <button class="save"   id="extraInputSave">保存</button>
+      </div>
+    </div>
+  </div>
+
   </div><!-- /#appBody -->
 
   <!-- 現場切替モーダル -->
@@ -1064,7 +1080,8 @@
     return document.getElementById('confirmMask').classList.contains('show')
         || document.getElementById('siteSwitchMask').classList.contains('show')
         || document.getElementById('pwdChangeMask').classList.contains('show')
-        || document.getElementById('deletedConfirmMask').classList.contains('show');
+        || document.getElementById('deletedConfirmMask').classList.contains('show')
+        || document.getElementById('extraInputMask').classList.contains('show');
   }
   function focusInput() {
     if (isAnyModalOpen()) return;
@@ -1315,6 +1332,10 @@
       setResult('ok', res.message, res.time);
       addHistory(res.isDeleted ? 'warn' : 'ok', res.message);
       beep(true);
+      // v7.4: 追加入力が必要ならダイアログ表示 (配管採取深度・地下水水位)
+      if (res.needExtra) {
+        openExtraInputDialog(res.needExtra);
+      }
     } else if (res.needConfirm === 'deleted') {
       // 削除地点ダイアログ (案C: 警告 → OKで赤文字記録)
       pendingConfirm = { mode: res.mode, code: res.code, kind: res.kind, confirmDeleted: true };
@@ -1359,6 +1380,74 @@
     pendingConfirm = null;
     setResult('idle', 'キャンセルしました');
     focusInput();
+  });
+
+  // ---- 追加入力ダイアログ (v7.4: 配管採取深度 / 地下水水位) ----
+  const extraInputMask  = document.getElementById('extraInputMask');
+  const extraInputTitle = document.getElementById('extraInputTitle');
+  const extraInputDesc  = document.getElementById('extraInputDesc');
+  const extraInputLabel = document.getElementById('extraInputLabel');
+  const extraInputValue = document.getElementById('extraInputValue');
+  const extraInputHint  = document.getElementById('extraInputHint');
+  const extraInputError = document.getElementById('extraInputError');
+  let pendingExtra = null; // { kind, code, type, label, point }
+
+  function openExtraInputDialog(info) {
+    pendingExtra = info;
+    extraInputTitle.textContent = '📝 ' + info.label + ' 入力';
+    extraInputDesc.textContent  = info.point + ' の ' + info.label + ' を入力してください';
+    extraInputLabel.textContent = info.label;
+    extraInputValue.value = '';
+    extraInputError.textContent = '';
+    if (info.type === 'depth-range') {
+      extraInputHint.textContent = 'ヒント: 数値を入れると +0.5 して範囲化されます (例: 1.0 → 1.00-1.50m)';
+      extraInputValue.setAttribute('inputmode', 'decimal');
+      extraInputValue.setAttribute('placeholder', '例: 1.0');
+    } else {
+      extraInputHint.textContent = '入力した値がそのまま記録されます';
+      extraInputValue.setAttribute('inputmode', 'text');
+      extraInputValue.setAttribute('placeholder', '例: 2.5m');
+    }
+    extraInputMask.classList.add('show');
+    setTimeout(function() { extraInputValue.focus(); }, 50);
+  }
+
+  document.getElementById('extraInputSkip').addEventListener('click', function() {
+    extraInputMask.classList.remove('show');
+    pendingExtra = null;
+    setResult('warn', '追加入力をスキップしました (後で手動入力してください)');
+    focusInput();
+  });
+
+  document.getElementById('extraInputSave').addEventListener('click', function() {
+    if (!pendingExtra) { extraInputMask.classList.remove('show'); return; }
+    const val = extraInputValue.value.trim();
+    if (!val) { extraInputError.textContent = '値を入力してください'; return; }
+    const saveBtn = document.getElementById('extraInputSave');
+    saveBtn.disabled = true;
+    saveBtn.textContent = '保存中...';
+    extraInputError.textContent = '';
+    const info = pendingExtra;
+    google.script.run
+      .withSuccessHandler(function(res) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '保存';
+        if (!res.ok) {
+          extraInputError.textContent = res.message || '保存失敗';
+          return;
+        }
+        extraInputMask.classList.remove('show');
+        pendingExtra = null;
+        setResult('ok', '✓ ' + info.label + ' を記録: ' + (res.written || val));
+        addHistory('ok', info.label + ' 記録: ' + info.point + ' = ' + (res.written || val));
+        focusInput();
+      })
+      .withFailureHandler(function(e) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '保存';
+        extraInputError.textContent = '通信エラー: ' + e.message;
+      })
+      .savePickupExtra(getCurrentSpreadsheetId(), info.kind, info.code, val);
   });
 
   // ---- 削除地点 確認ダイアログ (v7) ----

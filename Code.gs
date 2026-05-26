@@ -143,6 +143,11 @@ const KIND_CONFIG = {
     pickupPointCol:  9,   // 地点抽出 I列
     pickupUdCol:     null,
     pickupCodeCol:   11,  // 地点抽出 K列
+    // v7.4: 採取深度を地点抽出シートJ列に入力 (採取モード時にダイアログ)
+    pickupExtraCol:  10,  // J列 (採取深度)
+    pickupExtraLabel: '採取深度',
+    pickupExtraType: 'depth-range',  // "1.0" → "1.00-1.50m" (+0.5)
+    pickupExtraOnModes: ['採取'],     // どのモード時にダイアログを出すか
     workSheet:       SHEET_HAIKAN,
     hasUd:           false,
     availableModes: ['採取', '受入', '風乾', '振り', 'ろか', '分析'],
@@ -182,6 +187,11 @@ const KIND_CONFIG = {
     pickupPointCol:  17,  // Q列
     pickupUdCol:     null,
     pickupCodeCol:   20,  // T列
+    // v7.4: 水位を地点抽出シートR列に入力 (受入モード時にダイアログ)
+    pickupExtraCol:  18,  // R列 (水位)
+    pickupExtraLabel: '水位',
+    pickupExtraType: 'plain',  // そのまま記録
+    pickupExtraOnModes: ['受入'],
     workSheet:       SHEET_CHIKASUI,
     hasUd:           false,
     // 地下水は受入のみ
@@ -363,11 +373,11 @@ function resolveBaseCode_(ss, kind, baseCode) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return null;
 
-  // 必要な列幅 (コード列まで、状態列・深度列含む)
+  // 必要な列幅 (コード列まで、状態列・深度列・extra列含む)
   const lastCol = Math.max(
     cfg.pickupCodeCol, cfg.pickupPointCol,
     cfg.pickupUdCol || 0, cfg.pickupStatusCol || 0,
-    cfg.pickupDepthCol || 0
+    cfg.pickupDepthCol || 0, cfg.pickupExtraCol || 0
   );
   const dispRange = sheet.getRange(2, 1, lastRow - 1, lastCol).getDisplayValues();
   const valRange  = sheet.getRange(2, 1, lastRow - 1, lastCol).getValues();
@@ -393,10 +403,15 @@ function resolveBaseCode_(ss, kind, baseCode) {
         ? String(valRange[i][cfg.pickupUdCol - 1]).trim() : '';
       const status = cfg.pickupStatusCol
         ? String(valRange[i][cfg.pickupStatusCol - 1]).trim() : '';
-      // 深度調査の場合のみ depth に値が入る
       const depth  = cfg.pickupDepthCol
         ? String(dispRange[i][cfg.pickupDepthCol - 1]).trim() : '';
-      return { point: point, ud: ud, status: status, depth: depth };
+      const extra  = cfg.pickupExtraCol
+        ? String(dispRange[i][cfg.pickupExtraCol - 1]).trim() : '';
+      return {
+        point: point, ud: ud, status: status, depth: depth,
+        extra: extra,
+        chitenRow: i + 2  // 地点抽出シートの行番号 (savePickupExtra で使用)
+      };
     }
   }
   return null;
@@ -882,6 +897,23 @@ function handlePhase1(ss, kind, mode, cfg, baseCode, worker, force, autoSwitched
     }
   }
 
+  // v7.4: pickupExtra 入力ダイアログのトリガー判定
+  //   - 種別が pickupExtraCol を持つ (配管下=採取深度, 地下水=水位)
+  //   - 現在の modeが pickupExtraOnModes に含まれる (例: 配管=採取時のみ)
+  //   - 地点抽出シートの extra列が空 (まだ未入力)
+  let needExtra = null;
+  if (kc.pickupExtraCol && kc.pickupExtraOnModes &&
+      kc.pickupExtraOnModes.indexOf(mode) >= 0 &&
+      !resolved.extra) {
+    needExtra = {
+      type:  kc.pickupExtraType || 'plain',
+      label: kc.pickupExtraLabel || '入力',
+      kind:  kind,
+      code:  baseCode,
+      point: point
+    };
+  }
+
   const udDispMsg = kc.hasUd ? '(' + udDisplay(ud) + ')' : '';
   const delTag = isDeleted ? ' [削除地点・赤文字]' : '';
   return {
@@ -891,6 +923,7 @@ function handlePhase1(ss, kind, mode, cfg, baseCode, worker, force, autoSwitched
     mode: mode, autoMode: autoSwitched ? mode : null,
     point: point, ud: ud, worker: worker,
     isDeleted: isDeleted,
+    needExtra: needExtra,
     time: Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm:ss')
   };
 }
@@ -900,6 +933,63 @@ function udNormalize(ud) {
   if (s === 'up' || s === '上') return 'up';
   if (s === 'down' || s === '下') return 'down';
   return s;
+}
+
+// v7.4: 配管深度の範囲展開 "1.0" → "1.00-1.50m" (+0.5)
+function formatDepthRange_(input) {
+  let s = String(input || '').trim();
+  if (!s) return '';
+  // 末尾の "m" を取る
+  s = s.replace(/m$/i, '').trim();
+  // すでに範囲形式なら何もせず返す (例: "1.00-1.50m")
+  if (s.indexOf('-') >= 0 || s.indexOf('〜') >= 0 || s.indexOf('~') >= 0) {
+    return /m$/i.test(input) ? String(input).trim() : String(input).trim() + 'm';
+  }
+  const num = parseFloat(s);
+  if (isNaN(num)) return String(input).trim();
+  const lower = num.toFixed(2);
+  const upper = (num + 0.5).toFixed(2);
+  return lower + '-' + upper + 'm';
+}
+
+/**
+ * クライアントから呼ぶ: スキャン成功後の追加入力 (水位/採取深度) を地点抽出シートに書き込む。
+ * @param {string} spreadsheetId
+ * @param {string} kind 種別 (内部種別: '配管・ピット・盛土下' / '地下水' 等)
+ * @param {string} baseCode スキャンしたコード
+ * @param {string} value ユーザー入力値
+ * @return {Object} { ok, message, written }
+ */
+function savePickupExtra(spreadsheetId, kind, baseCode, value) {
+  try {
+    if (!kind || !KIND_CONFIG[kind]) return { ok: false, message: '不明な種別: ' + kind };
+    const kc = KIND_CONFIG[kind];
+    if (!kc.pickupExtraCol) return { ok: false, message: kind + ' は extra 入力に未対応' };
+
+    const ss = openSpreadsheet_(spreadsheetId);
+    const resolved = resolveBaseCode_(ss, kind, baseCode);
+    if (!resolved || !resolved.chitenRow) {
+      return { ok: false, message: 'コード ' + baseCode + ' の行が見つかりません' };
+    }
+
+    // 値の前処理 (種別ごとに変換)
+    let writeValue = String(value || '').trim();
+    if (kc.pickupExtraType === 'depth-range') {
+      writeValue = formatDepthRange_(writeValue);
+    }
+    if (!writeValue) return { ok: false, message: '入力値が空です' };
+
+    const chitenSheet = ss.getSheetByName(SHEET_CHITEN);
+    chitenSheet.getRange(resolved.chitenRow, kc.pickupExtraCol).setValue(writeValue);
+
+    return {
+      ok: true,
+      message: kc.pickupExtraLabel + ' を記録: ' + writeValue,
+      written: writeValue
+    };
+  } catch (e) {
+    return { ok: false, message: 'エラー: ' + e.message };
+  }
 }
 
 function phase1ColName(colKey) {
