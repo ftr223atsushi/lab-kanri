@@ -189,22 +189,26 @@ const KIND_CONFIG = {
     pickupPointCol:  17,  // Q列
     pickupUdCol:     null,
     pickupCodeCol:   20,  // T列
-    // v7.4: 水位を地点抽出シートR列に入力 (受入モード時にダイアログ)
+    // v7.4: 水位を地点抽出シートR列に入力 (採取/受入モード時にダイアログ)
+    //   - 採取時: 未入力なら入力促し
+    //   - 受入時: もう一度チャンス
     pickupExtraCol:  18,  // R列 (水位)
     pickupExtraLabel: '水位',
     pickupExtraType: 'plain',  // そのまま記録
-    pickupExtraOnModes: ['受入'],
+    pickupExtraOnModes: ['採取', '受入'],
     workSheet:       SHEET_CHIKASUI,
     hasUd:           false,
-    // 地下水は受入のみ
-    availableModes: ['受入'],
-    // 書込先シート: A=状態 B=地点 C=水位 D=容器の種類 E=受け入れ F=受け入れ担
-    // shast-kanri は E列(受入) と F列(担当) のみ書込。水位/容器の種類は触らない
+    // v7.5: 採取モード追加 (地下水シートに採取列が追加されたため)
+    availableModes: ['採取', '受入'],
+    // 書込先シート (v7.5): A=状態 B=地点 C=水位 D=容器の種類
+    //                      E=採取 F=採取担当 G=受け入れ H=受け入れ担
+    // shast-kanri は E,F,G,H に書込。水位(C)/容器の種類(D) は触らない
     workCols: {
       STATUS:   1, POINT: 2,
-      SUI:      3,  // C列 水位 (shast-kanriは触らない)
+      SUI:      3,  // C列 水位 (shast-kanriは触らない、ダイアログ→地点抽出R列へ)
       YOKI:     4,  // D列 容器の種類 (shast-kanriは触らない)
-      UKEIRE:   5, UKEIRE_W: 6   // E,F (shast-kanriが書込)
+      SAISHU:   5, SAISHU_W: 6,   // E,F (採取時刻・担当)
+      UKEIRE:   7, UKEIRE_W: 8    // G,H (受入時刻・担当)
     }
   }
 };
