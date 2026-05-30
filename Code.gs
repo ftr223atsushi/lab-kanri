@@ -335,6 +335,85 @@ function doGet() {
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
+// ========== JSON API (v8: APK + 外部HTML 用) ==========
+// 外部ホスト (Android APK の assets, GitHub Pages 等) から fetch で呼ぶ。
+// 既存の google.script.run ルートは触らず並行運用。
+//
+// クライアントからは:
+//   fetch(GAS_URL, {
+//     method: 'POST',
+//     headers: {'Content-Type': 'text/plain;charset=UTF-8'},  // ← CORS preflight回避
+//     body: JSON.stringify({ action: 'handleScan', spreadsheetId, kind, mode, code, ... })
+//   })
+//
+// レスポンスは ContentService 経由の JSON 文字列。
+function doPost(e) {
+  const respond = function(obj) {
+    return ContentService
+      .createTextOutput(JSON.stringify(obj))
+      .setMimeType(ContentService.MimeType.JSON);
+  };
+
+  try {
+    const raw = (e && e.postData && e.postData.contents) ? e.postData.contents : '{}';
+    const p = JSON.parse(raw);
+    const action = p.action || '';
+
+    switch (action) {
+      // ---- スキャン処理 ----
+      case 'handleScan':
+        return respond(handleScan(
+          p.spreadsheetId, p.kind, p.mode, p.code,
+          !!p.force, p.overrideWorker || '', !!p.confirmDeleted
+        ));
+
+      case 'savePickupExtra':
+        return respond(savePickupExtra(p.spreadsheetId, p.kind, p.code, p.value));
+
+      // ---- 担当者管理 ----
+      case 'getWorkerList':
+        return respond(getWorkerList());
+      case 'addWorker':
+        return respond(addWorker(p.name));
+      case 'setCurrentWorker':
+        return respond(setCurrentWorker(p.name));
+
+      // ---- 現場切替・パスワード ----
+      case 'getSpreadsheetMeta':
+        return respond(getSpreadsheetMeta(p.spreadsheetId));
+      case 'listSpreadsheetsInSharedFolder':
+        return respond(listSpreadsheetsInSharedFolder());
+      case 'verifyPassword':
+        return respond(verifyPassword(p.password));
+      case 'changePassword':
+        return respond(changePassword(p.oldPassword, p.newPassword));
+
+      // ---- 日報・バーコード印刷 ----
+      case 'getDailyReportData':
+        return respond(getDailyReportData(p.spreadsheetId));
+      case 'getBarcodePrintData':
+        return respond(getBarcodePrintData(p.spreadsheetId));
+      case 'markBarcodePrinted':
+        return respond(markBarcodePrinted(p.spreadsheetId, p.pointList || []));
+
+      // ---- 管理機能 ----
+      case 'regenerateAllBarcodes':
+        return respond(regenerateAllBarcodes(p.spreadsheetId));
+      case 'migrateKoteiToV3':
+        return respond(migrateKoteiToV3(p.spreadsheetId));
+
+      // ---- 疎通確認 ----
+      case 'ping':
+        return respond({ ok: true, message: 'pong', version: 'v8', time: new Date().toISOString() });
+
+      default:
+        return respond({ ok: false, message: 'unknown action: ' + action });
+    }
+  } catch (err) {
+    return respond({ ok: false, message: 'doPost error: ' + (err && err.message ? err.message : String(err)) });
+  }
+}
+
 // ========== スプレッドシート切替 (端末ごと/現場ごと) ==========
 
 /**
