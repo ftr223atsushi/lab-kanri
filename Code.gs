@@ -280,7 +280,9 @@ const MODES = {
   '受入': {
     phase: 1,
     col: 'UKEIRE', workerCol: 'UKEIRE_W',
-    prevCol: 'SAISHU', strict: true
+    // v10.2: 採取はオプション扱い (現場で記録漏れの可能性あり)
+    //        → 受入単独でも記録可、警告も出さない
+    prevCol: null, strict: false
   },
   '風乾': {
     phase: 1,
