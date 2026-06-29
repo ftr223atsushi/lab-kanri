@@ -390,6 +390,10 @@ function doPost(e) {
       case 'changePassword':
         return respond(changePassword(p.oldPassword, p.newPassword));
 
+      // ---- 分析検体ビュー (v10.7) ----
+      case 'getKentaiData':
+        return respond(getKentaiData(p.spreadsheetId));
+
       // ---- 日報・バーコード印刷 ----
       case 'getDailyReportData':
         return respond(getDailyReportData(p.spreadsheetId));
@@ -1547,6 +1551,38 @@ function logToDailyReport(ss, mode, point, udOrColor, worker, time) {
  * クライアント側で HTML テーブルとして新タブに描画 → window.print()。
  * PDFファイルは一切作らないので、ダウンロード保存も発生しない。
  */
+/**
+ * v10.7: 分析検体シート A〜P列を取得して2次元配列で返す。
+ * shast LAB の WebView 内で読み取り専用ビューを表示する用途。
+ */
+function getKentaiData(spreadsheetId) {
+  try {
+    const ss = openSpreadsheet_(spreadsheetId);
+    const sheet = ss.getSheetByName('分析検体');
+    if (!sheet) {
+      return { ok: false, message: '分析検体シートが見つかりません' };
+    }
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 1) {
+      return { ok: true, name: '分析検体', header: [], rows: [] };
+    }
+    // A〜P列 (1〜16列)
+    const KENTAI_COLS = 16;
+    const range = sheet.getRange(1, 1, lastRow, KENTAI_COLS);
+    const display = range.getDisplayValues();
+    if (display.length === 0) {
+      return { ok: true, name: '分析検体', header: [], rows: [] };
+    }
+    const header = display[0].map(function(v) { return String(v == null ? '' : v); });
+    const rows   = display.slice(1).map(function(r) {
+      return r.map(function(v) { return String(v == null ? '' : v); });
+    });
+    return { ok: true, name: '分析検体', header: header, rows: rows };
+  } catch (e) {
+    return { ok: false, message: 'エラー: ' + e.message };
+  }
+}
+
 function getDailyReportData(spreadsheetId) {
   try {
     const ss = openSpreadsheet_(spreadsheetId);
