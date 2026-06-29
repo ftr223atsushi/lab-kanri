@@ -628,9 +628,10 @@ function getWorkerList() {
     if (json) added = JSON.parse(json);
   } catch (e) {}
   const merged = DEFAULT_WORKERS.concat(added.filter(n => DEFAULT_WORKERS.indexOf(n) < 0));
+  // v10.10: current はサーバー保存しなくなったので常に空。端末側 localStorage が保持。
   return {
     workers: merged,
-    current: props.getProperty(PROP_CURRENT_WORKER) || ''
+    current: ''
   };
 }
 
@@ -651,13 +652,9 @@ function addWorker(name) {
   return { ok: true, workers: DEFAULT_WORKERS.concat(added) };
 }
 
+// v10.10: 担当者は端末ローカルで持つ。サーバー保存は廃止 (noop)。
+// APK側との互換のため API は残すが何もしない。
 function setCurrentWorker(name) {
-  const props = PropertiesService.getScriptProperties();
-  if (name) {
-    props.setProperty(PROP_CURRENT_WORKER, String(name));
-  } else {
-    props.deleteProperty(PROP_CURRENT_WORKER);
-  }
   return { ok: true };
 }
 
@@ -687,11 +684,11 @@ function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker, conf
       return { ok: false, message: e.message };
     }
 
-    const props = PropertiesService.getScriptProperties();
-    // ろか2段スキャンの場合は1個目（ろか）スキャン時点の担当者で記録する
+    // v10.10: 担当者は端末ローカル(localStorage)で持つ → 毎回 overrideWorker で渡される
+    // 旧: ScriptProperties の current_worker (グローバル共有) → 2端末同時で後勝ち上書きバグ
     const worker = (overrideWorker && String(overrideWorker).trim())
       ? String(overrideWorker).trim()
-      : (props.getProperty(PROP_CURRENT_WORKER) || '');
+      : '';
     if (!worker) {
       return { ok: false, message: '担当者を選択してください' };
     }
