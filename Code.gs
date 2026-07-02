@@ -394,6 +394,10 @@ function doPost(e) {
       case 'getKentaiData':
         return respond(getKentaiData(p.spreadsheetId));
 
+      // ---- 採取確認ビュー (v10.14) ----
+      case 'getSaishuData':
+        return respond(getSaishuData(p.spreadsheetId));
+
       // ---- 日報・バーコード印刷 ----
       case 'getDailyReportData':
         return respond(getDailyReportData(p.spreadsheetId));
@@ -1575,6 +1579,39 @@ function getKentaiData(spreadsheetId) {
       return r.map(function(v) { return String(v == null ? '' : v); });
     });
     return { ok: true, name: '分析検体', header: header, rows: rows };
+  } catch (e) {
+    return { ok: false, message: 'エラー: ' + e.message };
+  }
+}
+
+/**
+ * v10.14: 表層土壌シートの B〜E列 (地点/上下/採取日時/採取担当) を取得。
+ * APK 側で区画別に集約 → 上下判定 (☑ / ↑ / ↓) して採取確認ビューに表示する用途。
+ */
+function getSaishuData(spreadsheetId) {
+  try {
+    const ss = openSpreadsheet_(spreadsheetId);
+    const sheet = ss.getSheetByName(SHEET_HYOSO);
+    if (!sheet) {
+      return { ok: false, message: SHEET_HYOSO + 'シートが見つかりません' };
+    }
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 1) {
+      return { ok: true, name: SHEET_HYOSO, header: [], rows: [] };
+    }
+    // v10.15: B〜G列 (2〜7列 / 6列分): 地点 / 上下 / 採取日時 / 採取担当 / 受入日時 / 受入担当
+    //         → 採取ビュー(D列)＋分析検体ビューの↑↓判定(F列)の両用途で使う
+    const SAISHU_COLS = 6;
+    const range = sheet.getRange(1, 2, lastRow, SAISHU_COLS);
+    const display = range.getDisplayValues();
+    if (display.length === 0) {
+      return { ok: true, name: SHEET_HYOSO, header: [], rows: [] };
+    }
+    const header = display[0].map(function(v) { return String(v == null ? '' : v); });
+    const rows   = display.slice(1).map(function(r) {
+      return r.map(function(v) { return String(v == null ? '' : v); });
+    });
+    return { ok: true, name: SHEET_HYOSO, header: header, rows: rows };
   } catch (e) {
     return { ok: false, message: 'エラー: ' + e.message };
   }
