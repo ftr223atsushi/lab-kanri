@@ -306,24 +306,60 @@ function getKindSheet_(ss, kind) {
   return null;
 }
 
-// ========== コード解析 (v2) ==========
+// ========== コード解析 (v2形式 + 旧形式引き継ぎ) ==========
 /**
- * 例:
- *  "TEDC-S-0001"        → { siteId:'TEDC', codeType:'S', baseCode:'TEDC-S-0001', suffix:'' }
- *  "TEDC-L-0001-huri"   → { siteId:'TEDC', codeType:'L', baseCode:'TEDC-L-0001', suffix:'huri' }
+ * v2形式:
+ *  "TEDC-S-0001"        → { format:'v2', siteId:'TEDC', codeType:'S', baseCode:'TEDC-S-0001', suffix:'' }
+ *  "TEDC-L-0001-huri"   → { format:'v2', siteId:'TEDC', codeType:'L', baseCode:'TEDC-L-0001', suffix:'huri' }
+ * 旧形式 (v2ブックに引き継いで使う場合。種別文字は信用せずシート横断検索する):
+ *  "0004-S-260715-0055"       → { format:'legacy', baseCode:'0004-S-260715-0055', suffix:'' }
+ *  "0004-K-260715-0057-huri"  → { format:'legacy', baseCode:'0004-K-260715-0057', suffix:'huri' }
  * 形式外は null。
  */
 function parseCodeV2(code) {
   const s = String(code || '').trim();
-  const m = s.toUpperCase().match(/^([A-Z]{4})-(WG|WP|[SGHDL])-(\d{4})(?:-(HURI|ROKA))?$/);
-  if (!m) return null;
-  return {
-    siteId: m[1],
-    codeType: m[2],
-    seq: m[3],
-    suffix: m[4] ? m[4].toLowerCase() : '',
-    baseCode: m[1] + '-' + m[2] + '-' + m[3]
-  };
+  const up = s.toUpperCase();
+  // v2形式
+  let m = up.match(/^([A-Z]{4})-(WG|WP|[SGHDL])-(\d{4})(?:-(HURI|ROKA))?$/);
+  if (m) {
+    return {
+      format: 'v2',
+      siteId: m[1],
+      codeType: m[2],
+      seq: m[3],
+      suffix: m[4] ? m[4].toLowerCase() : '',
+      baseCode: m[1] + '-' + m[2] + '-' + m[3]
+    };
+  }
+  // 旧形式 (現場番号4桁-種別/色1〜2文字-日付6桁-連番4桁)
+  m = up.match(/^(\d{4})-([A-Z]{1,2})-(\d{6})-(\d{4})(?:-(HURI|ROKA))?$/);
+  if (m) {
+    return {
+      format: 'legacy',
+      siteId: m[1],          // 数字の現場番号 (件名B12の英字IDとは照合しない)
+      codeType: m[2],        // 種別/色文字だが信用しない (シート横断検索で決める)
+      seq: m[4],
+      suffix: m[5] ? m[5].toLowerCase() : '',
+      baseCode: m[1] + '-' + m[2] + '-' + m[3] + '-' + m[4]
+    };
+  }
+  return null;
+}
+
+/**
+ * 旧形式コード用: 4シートのコード列を横断検索して最初にヒットした種別を返す。
+ * (種別文字がランダム付与でも動くように、コードの文字には依存しない)
+ * @return {Object|null} { kind, resolved } または null
+ */
+function findCodeAcrossSheets_(ss, baseCode) {
+  const kinds = ['表層土壌', '土壌ガス', '配管・ピット・盛り土下', '深度調査'];
+  for (let i = 0; i < kinds.length; i++) {
+    try {
+      const resolved = resolveByCode_(ss, kinds[i], baseCode);
+      if (resolved) return { kind: kinds[i], resolved: resolved };
+    } catch (e) { /* シート無しは次へ */ }
+  }
+  return null;
 }
 
 /**
@@ -398,14 +434,16 @@ function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker, conf
       return { ok: false, message: '担当者を選択してください' };
     }
 
-    // コード解析
+    // コード解析 (v2形式 + 旧形式引き継ぎの両対応)
     const parsed = parseCodeV2(code);
     if (!parsed) {
-      return { ok: false, message: '新方式のコードではありません: ' + code + ' (例: ' + siteId + '-S-0001)' };
+      return { ok: false, message: 'コード形式を認識できません: ' + code + ' (例: ' + siteId + '-S-0001 / 0004-S-260715-0001)' };
     }
 
     // v2ゲート②: 現場ID照合 (SPEC §3.5 誤書き込み防止)
-    if (parsed.siteId !== siteId) {
+    // 旧形式コードは件名B12の英字IDと形が違うため照合しない
+    // (シートのコード列に存在するかの検索自体が照合の代わりになる)
+    if (parsed.format === 'v2' && parsed.siteId !== siteId) {
       return {
         ok: false,
         message: '別の現場のコードです (コード: ' + parsed.siteId + ' / この現場: ' + siteId + ')'
@@ -415,8 +453,8 @@ function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker, conf
     let effectiveMode = mode;
     let autoSwitched = false;
 
-    // ---- L コード (分析検体: 振り/ろか/分析) ----
-    if (parsed.codeType === 'L') {
+    // ---- 振り/ろか/分析 (v2: Lコード / 旧形式: 色文字+suffix コード) ----
+    if (parsed.codeType === 'L' || (parsed.format === 'legacy' && parsed.suffix)) {
       if (!parsed.suffix) {
         return { ok: false, message: 'Lコードは -huri / -roka 付きで読んでください' };
       }
@@ -436,7 +474,7 @@ function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker, conf
       return handlePhase2V2(ss, effectiveMode, cfg2, parsed, worker, force, autoSwitched);
     }
 
-    // ---- 実データコード (S/G/H/D/WG/WP): phase1 ----
+    // ---- 実データコード: phase1 ----
     if (parsed.suffix) {
       return { ok: false, message: '-huri/-roka はLコード (分析検体) にだけ付きます: ' + code };
     }
@@ -446,9 +484,30 @@ function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker, conf
     const cfg = MODES[effectiveMode];
     if (!cfg) return { ok: false, message: 'モードが不正です: ' + effectiveMode };
 
-    const effectiveKind = CODE_TYPE_TO_KIND[parsed.codeType];
+    // 種別と行の解決
+    //  - v2形式: コードの種別文字 → シート直行
+    //  - 旧形式: 種別文字を信用せず4シートのコード列を横断検索
+    let effectiveKind;
+    let isWater;
+    let resolved;
+    if (parsed.format === 'v2') {
+      effectiveKind = CODE_TYPE_TO_KIND[parsed.codeType];
+      isWater = WATER_CODE_TYPES.indexOf(parsed.codeType) >= 0;
+      resolved = resolveByCode_(ss, effectiveKind, parsed.baseCode);
+      if (!resolved) {
+        return { ok: false, message: 'コード ' + parsed.baseCode + ' が「' + effectiveKind + '」シートに見つかりません' };
+      }
+    } else {
+      const found = findCodeAcrossSheets_(ss, parsed.baseCode);
+      if (!found) {
+        return { ok: false, message: 'コード ' + parsed.baseCode + ' がどの実データシートにも見つかりません' };
+      }
+      effectiveKind = found.kind;
+      resolved = found.resolved;
+      // 旧形式は地下水判定不可 → 深度調査シートの通常行として扱う
+      isWater = false;
+    }
     const kc = KIND_CONFIG[effectiveKind];
-    const isWater = WATER_CODE_TYPES.indexOf(parsed.codeType) >= 0;
 
     // 分析モード権限チェック
     if (cfg.requireWorkers && cfg.requireWorkers.indexOf(worker) < 0) {
@@ -468,12 +527,6 @@ function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker, conf
         ok: false,
         message: '「' + label + '」では「' + effectiveMode + '」モードは使えません。使用可: ' + allowedModes.join(' / ')
       };
-    }
-
-    // コード直引き (1回引き)
-    const resolved = resolveByCode_(ss, effectiveKind, parsed.baseCode);
-    if (!resolved) {
-      return { ok: false, message: 'コード ' + parsed.baseCode + ' が「' + effectiveKind + '」シートに見つかりません' };
     }
 
     // 状態=削除 の確認
