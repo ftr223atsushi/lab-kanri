@@ -125,6 +125,7 @@ const WATER_EXTRA = { col: 'DEPTH', label: '水位', type: 'plain', onModes: ['�
 const DELETED_FONT_COLOR = '#c62828';
 
 // v2暫定: 前処理シート (振り/ろか/分析(土壌) の記録先)
+// ※現行構成ブック用に残置。分離構成ブック (ラボ記録あり) では使わない
 // A=コード B=区画 C=色 D=振り時刻 E=振り担当 F=ろか時刻 G=ろか担当 H=分析時刻 I=分析担当
 const COL_ZENSHORI = {
   CODE: 1, POINT: 2, COLOR: 3,
@@ -133,6 +134,120 @@ const COL_ZENSHORI = {
   BUNSEKI_T: 8, BUNSEKI_W: 9
 };
 const ZENSHORI_HEADER = ['コード', '区画', '色', '振り時刻', '振り担当', 'ろか時刻', 'ろか担当', '分析時刻', '分析担当'];
+
+// ========== 分離構成 (SPEC_sheet_ownership.md §0/§3.2) ==========
+// 「ラボ記録」シート = picker がヘッダー生成、行の書き手は lab-kanri のみ (find-or-append)
+// このシートの有無で新旧構成を自動判別する (§4-4)。lab-kanri はシートを作らない。
+// 列は見出し検索で引く (列の追加・移動に耐える。見出し文字列が契約)
+const SHEET_LABREC = 'ラボ記録';
+
+// ラボ記録の見出し名 (§3.2 の17列のうち lab-kanri が使うもの)
+const LABREC_H = {
+  CODE:    'コード',
+  POINT:   '地点',
+  KIND:    '種別',
+  GENCHI_T: '現地確認日時', GENCHI_W: '現地確認担当',
+  UKEIRE_T: '受入日時',     UKEIRE_W: '受入担当',
+  FUKAN_T:  '風乾日時',     FUKAN_W:  '風乾担当',
+  HURI_T:   '振り日時',     HURI_W:   '振り担当',
+  ROKA_T:   'ろか日時',     ROKA_W:   'ろか担当',
+  BUNSEKI_T:'分析日時',     BUNSEKI_W:'分析担当',
+  LAB_DEPTH:'ラボ深度'
+};
+
+// UIモード → ラボ記録の書込列 (見出し名) と工程ルール
+// UIの「採取」は分離構成では「現地確認」(旧運用の採取確認に相当。shastの採取日時とは別物)
+const LABREC_MODE = {
+  '採取': { t: LABREC_H.GENCHI_T, w: LABREC_H.GENCHI_W, prev: null, label: '現地確認' },
+  '受入': { t: LABREC_H.UKEIRE_T, w: LABREC_H.UKEIRE_W, prev: null, label: '受入' },
+  '風乾': { t: LABREC_H.FUKAN_T, w: LABREC_H.FUKAN_W, prev: LABREC_H.UKEIRE_T, prevLabel: '受入', strict: true, label: '風乾' },
+  '振り': { t: LABREC_H.HURI_T, w: LABREC_H.HURI_W, prev: null, label: '振り' },
+  'ろか': { t: LABREC_H.ROKA_T, w: LABREC_H.ROKA_W, prev: LABREC_H.HURI_T, prevLabel: '振り', strict: false, label: 'ろか' },
+  '分析': { t: LABREC_H.BUNSEKI_T, w: LABREC_H.BUNSEKI_W, prev: LABREC_H.ROKA_T, prevLabel: 'ろか', strict: false, label: '分析', requireWorkers: ['早川', '山口'] }
+};
+
+/**
+ * ラボ記録シートの見出し行を読み、見出し名→列番号(1始まり)のマップを返す。
+ * 必須見出しが無ければ throw (どの見出しが無いかを明示)。
+ */
+function getLabRecCols_(sheet) {
+  const lastCol = Math.max(sheet.getLastColumn(), 1);
+  const header = sheet.getRange(1, 1, 1, lastCol).getDisplayValues()[0];
+  const map = {};
+  for (let i = 0; i < header.length; i++) {
+    const h = String(header[i] || '').trim();
+    if (h && !(h in map)) map[h] = i + 1;
+  }
+  // 必須: コードと各工程列
+  const required = [LABREC_H.CODE, LABREC_H.POINT, LABREC_H.KIND,
+                    LABREC_H.GENCHI_T, LABREC_H.UKEIRE_T, LABREC_H.FUKAN_T,
+                    LABREC_H.HURI_T, LABREC_H.ROKA_T, LABREC_H.BUNSEKI_T, LABREC_H.LAB_DEPTH];
+  for (let i = 0; i < required.length; i++) {
+    if (!map[required[i]]) {
+      throw new Error('ラボ記録シートに見出し「' + required[i] + '」が見つかりません (見出し名は変えないでください)');
+    }
+  }
+  return map;
+}
+
+/**
+ * ラボ記録シートでコードの行を検索。無ければ末尾に追記 (コード/地点/種別を書く)。
+ * @return {number} 行番号
+ */
+function findOrAppendLabRow_(sheet, cols, baseCode, point, kindLabel) {
+  const target = String(baseCode).trim().toUpperCase();
+  const lastRow = sheet.getLastRow();
+  if (lastRow >= 2) {
+    const codes = sheet.getRange(2, cols[LABREC_H.CODE], lastRow - 1, 1).getDisplayValues();
+    for (let i = 0; i < codes.length; i++) {
+      if (String(codes[i][0]).trim().toUpperCase() === target) return i + 2;
+    }
+  }
+  const row = Math.max(sheet.getLastRow(), 1) + 1;
+  sheet.getRange(row, cols[LABREC_H.CODE]).setValue(baseCode);
+  if (point) sheet.getRange(row, cols[LABREC_H.POINT]).setValue(point);
+  if (kindLabel) sheet.getRange(row, cols[LABREC_H.KIND]).setValue(kindLabel);
+  return row;
+}
+
+/**
+ * 分析検体シートの Q(振り)/R(ろか) 列からLコードの行を探し、区画名と色を返す。
+ */
+function lookupKentaiByLCode_(ss, baseCode) {
+  const out = { point: '', color: '' };
+  try {
+    const ks = ss.getSheetByName(SHEET_KENTAI);
+    if (!ks) return out;
+    const lastRow = ks.getLastRow();
+    if (lastRow < 2) return out;
+    const data = ks.getRange(2, 1, lastRow - 1, 18).getDisplayValues();
+    const targetHuri = (baseCode + '-HURI');
+    const targetRoka = (baseCode + '-ROKA');
+    for (let i = 0; i < data.length; i++) {
+      const q = String(data[i][16]).trim().toUpperCase();
+      const r = String(data[i][17]).trim().toUpperCase();
+      if (q === targetHuri || r === targetRoka) {
+        out.point = String(data[i][0]).trim();
+        if (String(data[i][10]).trim()) out.color = '黒';
+        else if (String(data[i][11]).trim()) out.color = '赤';
+        else if (String(data[i][12]).trim()) out.color = '青';
+        break;
+      }
+    }
+  } catch (e) {}
+  return out;
+}
+
+/** 分離構成: ラボ記録の種別列に入れる表示ラベル */
+function labKindLabel_(kind, ud, codeType) {
+  if (codeType === 'WG') return '地下水WG';
+  if (codeType === 'WP') return '地下水WP';
+  if (kind === '表層土壌') return ud ? ('表層(' + udDisplay(ud) + ')') : '表層';
+  if (kind === '土壌ガス') return 'ガス';
+  if (kind === '配管・ピット・盛り土下') return '配管';
+  if (kind === '深度調査') return '深度';
+  return kind;
+}
 
 // ========== モード定義 ==========
 const MODES = {
@@ -232,7 +347,7 @@ function doPost(e) {
 
       // ---- 疎通確認 ----
       case 'ping':
-        return respond({ ok: true, message: 'pong', version: 'v2', time: new Date().toISOString() });
+        return respond({ ok: true, message: 'pong', version: 'v2.3-labrec', time: new Date().toISOString() });
 
       default:
         return respond({ ok: false, message: 'unknown action: ' + action });
@@ -379,21 +494,26 @@ function resolveByCode_(ss, kind, baseCode) {
   Object.keys(kc.workCols).forEach(function(k) {
     if (kc.workCols[k] > maxCol) maxCol = kc.workCols[k];
   });
+  // 分離構成の実データシートはラボ列が無く列数が少ない → シート実列数にクランプ
+  maxCol = Math.min(maxCol, sheet.getMaxColumns());
   const disp = sheet.getRange(2, 1, lastRow - 1, maxCol).getDisplayValues();
   const target = String(baseCode).trim().toUpperCase();
 
   for (let i = 0; i < disp.length; i++) {
-    const codeVal = String(disp[i][kc.workCols.CODE - 1]).trim().toUpperCase();
+    const r = disp[i];
+    const cell = function(col) {
+      return (col && col >= 1 && col <= r.length) ? String(r[col - 1]).trim() : '';
+    };
+    const codeVal = cell(kc.workCols.CODE).toUpperCase();
     if (codeVal !== target) continue;
     return {
       row: i + 2,
       sheet: sheet,
-      point:  String(disp[i][kc.workCols.POINT - 1]).trim(),
-      ud:     kc.workCols.UD ? String(disp[i][kc.workCols.UD - 1]).trim() : '',
-      depth:  kc.workCols.DEPTH ? String(disp[i][kc.workCols.DEPTH - 1]).trim() : '',
-      status: String(disp[i][kc.workCols.STATUS - 1]).trim(),
-      extra:  kc.extraCol && kc.workCols[kc.extraCol]
-        ? String(disp[i][kc.workCols[kc.extraCol] - 1]).trim() : ''
+      point:  cell(kc.workCols.POINT),
+      ud:     cell(kc.workCols.UD),
+      depth:  cell(kc.workCols.DEPTH),
+      status: cell(kc.workCols.STATUS),
+      extra:  kc.extraCol ? cell(kc.workCols[kc.extraCol]) : ''
     };
   }
   return null;
@@ -427,6 +547,10 @@ function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker, conf
     } catch (e) {
       return { ok: false, message: e.message };
     }
+
+    // 分離構成判別 (SPEC_sheet_ownership.md §4-4): ラボ記録シートの有無
+    // あり = 分離構成 (ラボ工程はラボ記録へ書く) / なし = 現行構成 (従来どおり実データシートへ)
+    const labSheet = ss.getSheetByName(SHEET_LABREC);
 
     // 担当者 (端末ローカルから毎回送信される)
     const worker = (overrideWorker && String(overrideWorker).trim()) ? String(overrideWorker).trim() : '';
@@ -470,6 +594,10 @@ function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker, conf
       const cfg2 = MODES[effectiveMode];
       if (cfg2.requireWorkers && cfg2.requireWorkers.indexOf(worker) < 0) {
         return { ok: false, message: '分析モードは ' + cfg2.requireWorkers.join('・') + ' のみ使用できます (現在: ' + worker + ')' };
+      }
+      // 分離構成: 振り/ろか/分析はラボ記録へ (現行構成は従来の前処理シート)
+      if (labSheet) {
+        return handlePhase2Lab_(ss, labSheet, effectiveMode, parsed, worker, force, autoSwitched);
       }
       return handlePhase2V2(ss, effectiveMode, cfg2, parsed, worker, force, autoSwitched);
     }
@@ -519,8 +647,17 @@ function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker, conf
       return { ok: false, message: '分析モードでは -roka 付きのLコードを読んでください' };
     }
 
+    // 分離構成: 削孔は現場(shast)側の記録なのでラボアプリからは書けない
+    if (labSheet && effectiveMode === '削孔') {
+      return { ok: false, message: '分離構成のブックでは削孔は現場(shast)側の記録です' };
+    }
+
     // availableModes チェック (地下水はさらに制限)
-    const allowedModes = isWater ? WATER_AVAILABLE_MODES : kc.availableModes;
+    let allowedModes = isWater ? WATER_AVAILABLE_MODES : kc.availableModes;
+    // 分離構成のガス: 受入・分析はラボ記録へ。削孔は上で拒否済み → 採取(現地確認)/受入/分析
+    if (labSheet && effectiveKind === '土壌ガス' && !isWater) {
+      allowedModes = ['採取', '受入', '分析'];
+    }
     if (allowedModes && allowedModes.indexOf(effectiveMode) < 0) {
       const label = isWater ? '地下水 (WG/WP)' : effectiveKind;
       return {
@@ -545,6 +682,10 @@ function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker, conf
     }
 
     const isDeleted = (resolved.status === '削除');
+    // 分離構成: ラボ工程はラボ記録シートへ (実データシートは読み取り専用)
+    if (labSheet) {
+      return handlePhase1Lab_(ss, labSheet, effectiveKind, effectiveMode, parsed, worker, force, isDeleted, resolved, isWater);
+    }
     return handlePhase1V2(ss, effectiveKind, effectiveMode, cfg, parsed, worker, force, isDeleted, resolved, isWater);
 
   } catch (e) {
@@ -662,6 +803,169 @@ function handlePhase1V2(ss, kind, mode, cfg, parsed, worker, force, isDeleted, r
   };
 }
 
+// ========== 分離構成: フェーズ1 (ラボ記録シートへ find-or-append) ==========
+// SPEC_sheet_ownership.md §3.2。実データシートは読み取り専用 (地点/状態/深度の解決のみ)。
+function handlePhase1Lab_(ss, labSheet, kind, mode, parsed, worker, force, isDeleted, resolved, isWater) {
+  const mc = LABREC_MODE[mode];
+  if (!mc) return { ok: false, message: 'モードが不正です: ' + mode };
+  const point = resolved.point;
+  if (!point) {
+    return { ok: false, message: 'コード ' + parsed.baseCode + ' の行に地点名がありません' };
+  }
+
+  const cols = getLabRecCols_(labSheet);
+  const kindLabel = labKindLabel_(kind, resolved.ud, parsed.codeType);
+  const row = findOrAppendLabRow_(labSheet, cols, parsed.baseCode, point, kindLabel);
+
+  const targetCell = labSheet.getRange(row, cols[mc.t]);
+
+  // 二重チェック
+  const existing = targetCell.getValue();
+  if (existing) {
+    const t = (existing instanceof Date) ? existing : new Date(existing);
+    return {
+      ok: false,
+      message: mc.label + ' は既に記録済み: ' + Utilities.formatDate(t, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm')
+    };
+  }
+
+  // 順番チェック (ガスの分析は受入が前。それ以外は LABREC_MODE の定義)
+  let prevHeader = mc.prev;
+  let prevLabel = mc.prevLabel;
+  if (mode === '分析' && kind === '土壌ガス') {
+    prevHeader = LABREC_H.UKEIRE_T;
+    prevLabel = '受入';
+  }
+  if (prevHeader) {
+    const prevVal = labSheet.getRange(row, cols[prevHeader]).getValue();
+    if (!prevVal) {
+      if (mc.strict) {
+        return { ok: false, message: prevLabel + ' が未記録です。先に ' + prevLabel + ' を記録してください' };
+      } else if (!force) {
+        return {
+          ok: false, needConfirm: true,
+          message: prevLabel + ' が完了していませんが ' + mc.label + ' を記録しますか？',
+          mode: mode, code: parsed.baseCode,
+          autoMode: null
+        };
+      }
+    }
+  }
+
+  // 書込 (削除地点なら赤文字)
+  const now = new Date();
+  const fontColor = isDeleted ? DELETED_FONT_COLOR : null;
+  targetCell.setValue(now);
+  targetCell.setNumberFormat('yyyy/MM/dd HH:mm');
+  targetCell.setFontColor(fontColor);
+  const workerCell = labSheet.getRange(row, cols[mc.w]);
+  workerCell.setValue(worker);
+  workerCell.setFontColor(fontColor);
+
+  // 日報 (土壌ガス除外・対象工程は DAILY_REPORT_MODES = 現行踏襲)
+  if (kind !== '土壌ガス') {
+    try {
+      const kc = KIND_CONFIG[kind];
+      let dailyBCol = '';
+      if (kc && kc.hasUd) dailyBCol = udDisplay(resolved.ud);
+      else if (isWater) dailyBCol = '地下水';
+      else dailyBCol = resolved.depth || '';
+      logToDailyReport(ss, mode, point, dailyBCol, worker, now);
+    } catch (e) {}
+  }
+
+  // 追加入力: ラボ深度列 (§3.3 実データシートには書かない)
+  //  - 配管: 受入時、ラボ深度が空なら現地深度入力を促す (計画深度をヒント表示)
+  //  - 地下水 (WG/WP): 現地確認/受入時、ラボ深度が空なら水位入力を促す
+  let needExtra = null;
+  try {
+    const labDepth = String(labSheet.getRange(row, cols[LABREC_H.LAB_DEPTH]).getDisplayValue() || '').trim();
+    if (!labDepth) {
+      if (isWater && WATER_EXTRA.onModes.indexOf(mode) >= 0) {
+        needExtra = { type: 'plain', label: '水位', kind: kind + ':LAB', code: parsed.baseCode, point: point };
+      } else if (kind === '配管・ピット・盛り土下' && mode === '受入') {
+        needExtra = {
+          type: 'depth-range', label: '現地深度', kind: kind + ':LAB',
+          code: parsed.baseCode, point: point,
+          hint: resolved.depth ? ('計画深度: ' + resolved.depth) : ''
+        };
+      }
+    }
+  } catch (e) {}
+
+  const kc2 = KIND_CONFIG[kind];
+  const udDispMsg = (kc2 && kc2.hasUd) ? '(' + udDisplay(resolved.ud) + ')'
+    : (resolved.depth ? '(' + resolved.depth + ')' : (isWater ? '(地下水)' : ''));
+  const delTag = isDeleted ? ' [削除地点・赤文字]' : '';
+  return {
+    ok: true,
+    message: mc.label + ' 記録完了: ' + point + udDispMsg + ' 担当:' + worker + delTag,
+    kind: kind,
+    mode: mode, autoMode: null,
+    point: point, ud: resolved.ud, worker: worker,
+    isDeleted: isDeleted,
+    needExtra: needExtra,
+    time: Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm:ss')
+  };
+}
+
+// ========== 分離構成: フェーズ2 (Lコード 振り/ろか/分析 → ラボ記録シート) ==========
+// 暫定「前処理」シートの正式な置き換え (SPEC_sheet_ownership.md §3.2)。
+function handlePhase2Lab_(ss, labSheet, mode, parsed, worker, force, autoSwitched) {
+  const mc = LABREC_MODE[mode];
+  if (!mc) return { ok: false, message: 'モードが不正です: ' + mode };
+
+  const info = lookupKentaiByLCode_(ss, parsed.baseCode);
+  const cols = getLabRecCols_(labSheet);
+  const kindLabel = info.color ? ('検体・' + info.color) : '検体';
+  const row = findOrAppendLabRow_(labSheet, cols, parsed.baseCode, info.point, kindLabel);
+
+  const targetCell = labSheet.getRange(row, cols[mc.t]);
+
+  // 二重チェック
+  const existing = targetCell.getValue();
+  if (existing) {
+    const t = (existing instanceof Date) ? existing : new Date(existing);
+    return {
+      ok: false,
+      message: mc.label + ' は既に記録済み: ' + Utilities.formatDate(t, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm')
+    };
+  }
+
+  // 順番チェック (振り→ろか→分析)
+  if (mc.prev) {
+    const prevVal = labSheet.getRange(row, cols[mc.prev]).getValue();
+    if (!prevVal && !force) {
+      return {
+        ok: false, needConfirm: true,
+        message: (mc.prevLabel || '前工程') + ' が完了していませんが ' + mc.label + ' を記録しますか？',
+        mode: mode, code: parsed.baseCode + '-' + (parsed.suffix || ''),
+        autoMode: autoSwitched ? mode : null
+      };
+    }
+  }
+
+  // 書込
+  const now = new Date();
+  targetCell.setValue(now);
+  targetCell.setNumberFormat('yyyy/MM/dd HH:mm');
+  labSheet.getRange(row, cols[mc.w]).setValue(worker);
+
+  // 日報 (振り/ろかのみ。logToDailyReport 内で対象工程フィルタ)
+  try {
+    logToDailyReport(ss, mode, info.point || parsed.baseCode, info.color, worker, now);
+  } catch (e) {}
+
+  const disp = info.point ? (info.point + (info.color ? ' ' + info.color : '')) : parsed.baseCode;
+  return {
+    ok: true,
+    message: mc.label + ' 記録完了: ' + disp + ' 担当:' + worker,
+    mode: mode, autoMode: autoSwitched ? mode : null,
+    point: info.point || parsed.baseCode, color: info.color, worker: worker,
+    time: Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm:ss')
+  };
+}
+
 // ========== 追加入力 (配管の現地深度 / 地下水の水位) ==========
 /**
  * v2: 実データシートに直接書く (地点抽出は無い)。
@@ -670,8 +974,9 @@ function handlePhase1V2(ss, kind, mode, cfg, parsed, worker, force, isDeleted, r
  */
 function savePickupExtra(spreadsheetId, kind, baseCode, value) {
   try {
+    const isLab = String(kind || '').indexOf(':LAB') >= 0;
     const isWater = String(kind || '').indexOf(':WATER') >= 0;
-    const realKind = String(kind || '').replace(':WATER', '');
+    const realKind = String(kind || '').replace(':WATER', '').replace(':LAB', '');
     const kc = KIND_CONFIG[realKind];
     if (!kc) return { ok: false, message: '不明な種別: ' + kind };
 
@@ -680,6 +985,33 @@ function savePickupExtra(spreadsheetId, kind, baseCode, value) {
 
     const parsed = parseCodeV2(baseCode);
     if (!parsed) return { ok: false, message: 'コード形式が不正です: ' + baseCode };
+
+    // 分離構成: ラボ記録シートのラボ深度列へ (空白のみ。実データシートには書かない §3.3)
+    if (isLab) {
+      const labSheet = ss.getSheetByName(SHEET_LABREC);
+      if (!labSheet) return { ok: false, message: 'ラボ記録シートが見つかりません' };
+      const cols = getLabRecCols_(labSheet);
+      const lastRow = labSheet.getLastRow();
+      let row = -1;
+      if (lastRow >= 2) {
+        const codes = labSheet.getRange(2, cols[LABREC_H.CODE], lastRow - 1, 1).getDisplayValues();
+        const target = parsed.baseCode.toUpperCase();
+        for (let i = 0; i < codes.length; i++) {
+          if (String(codes[i][0]).trim().toUpperCase() === target) { row = i + 2; break; }
+        }
+      }
+      if (row < 0) return { ok: false, message: 'コード ' + parsed.baseCode + ' の行がラボ記録に見つかりません (先にスキャンしてください)' };
+      const label = (realKind === '配管・ピット・盛り土下') ? '現地深度' : '水位';
+      const cur = String(labSheet.getRange(row, cols[LABREC_H.LAB_DEPTH]).getDisplayValue() || '').trim();
+      if (cur) {
+        return { ok: false, message: label + ' は既に入力済み: ' + cur + ' (上書きしません)' };
+      }
+      let wv = String(value || '').trim();
+      if (realKind === '配管・ピット・盛り土下') wv = formatDepthRange_(wv);
+      if (!wv) return { ok: false, message: '入力値が空です' };
+      labSheet.getRange(row, cols[LABREC_H.LAB_DEPTH]).setValue(wv);
+      return { ok: true, message: label + ' を記録 (ラボ深度): ' + wv, written: wv };
+    }
 
     const resolved = resolveByCode_(ss, realKind, parsed.baseCode);
     if (!resolved) return { ok: false, message: 'コード ' + parsed.baseCode + ' の行が見つかりません' };
@@ -928,7 +1260,9 @@ function getSpreadsheetMeta(spreadsheetId) {
     if (!siteId) {
       return { ok: false, message: 'このブックは旧方式です (件名B12に現場IDなし)。旧アプリ「shast LAB」で開いてください' };
     }
-    return { ok: true, id: ss.getId(), name: ss.getName(), url: ss.getUrl(), siteId: siteId };
+    // structure: 分離構成 (ラボ記録あり) or 現行構成
+    const structure = ss.getSheetByName(SHEET_LABREC) ? '分離構成' : '現行構成';
+    return { ok: true, id: ss.getId(), name: ss.getName(), url: ss.getUrl(), siteId: siteId, structure: structure };
   } catch (e) {
     return { ok: false, message: 'スプレッドシートを開けません: ' + e.message };
   }
@@ -1035,6 +1369,8 @@ function getKentaiData(spreadsheetId) {
 function getSaishuAll(spreadsheetId) {
   try {
     const ss = openSpreadsheet_(spreadsheetId);
+    // 分離構成なら受入はラボ記録から結合 (実データシートに受入列は無い)
+    const labMap = buildLabUkeireMap_(ss);
     // APK側のキーは旧表記「配管・ピット・盛土下」なのでキー名は旧のまま返す
     const kindMap = {
       '表層土壌': '表層土壌',
@@ -1044,7 +1380,7 @@ function getSaishuAll(spreadsheetId) {
     };
     const result = {};
     Object.keys(kindMap).forEach(function(apkKey) {
-      result[apkKey] = readKindWorkRows_(ss, kindMap[apkKey]);
+      result[apkKey] = readKindWorkRows_(ss, kindMap[apkKey], labMap);
     });
     return { ok: true, kinds: result };
   } catch (e) {
@@ -1052,7 +1388,33 @@ function getSaishuAll(spreadsheetId) {
   }
 }
 
-function readKindWorkRows_(ss, kind) {
+/**
+ * 分離構成: ラボ記録シートから コード(大文字) → { ukT, ukW } のマップを作る。
+ * 現行構成 (ラボ記録なし) は null を返す。
+ */
+function buildLabUkeireMap_(ss) {
+  const labSheet = ss.getSheetByName(SHEET_LABREC);
+  if (!labSheet) return null;
+  const map = {};
+  try {
+    const cols = getLabRecCols_(labSheet);
+    const lastRow = labSheet.getLastRow();
+    if (lastRow < 2) return map;
+    const maxCol = Math.max(cols[LABREC_H.CODE], cols[LABREC_H.UKEIRE_T], cols[LABREC_H.UKEIRE_W]);
+    const data = labSheet.getRange(2, 1, lastRow - 1, maxCol).getDisplayValues();
+    for (let i = 0; i < data.length; i++) {
+      const code = String(data[i][cols[LABREC_H.CODE] - 1] || '').trim().toUpperCase();
+      if (!code) continue;
+      map[code] = {
+        ukT: String(data[i][cols[LABREC_H.UKEIRE_T] - 1] || '').trim(),
+        ukW: String(data[i][cols[LABREC_H.UKEIRE_W] - 1] || '').trim()
+      };
+    }
+  } catch (e) {}
+  return map;
+}
+
+function readKindWorkRows_(ss, kind, labMap) {
   const cfg = KIND_CONFIG[kind];
   const empty = { name: kind, rows: [] };
   if (!cfg) return empty;
@@ -1065,6 +1427,8 @@ function readKindWorkRows_(ss, kind) {
   Object.keys(w).forEach(function(k) {
     if (typeof w[k] === 'number' && w[k] > maxCol) maxCol = w[k];
   });
+  // 分離構成の実データシートは列数が少ない → シート実列数にクランプ
+  maxCol = Math.min(maxCol, sheet.getMaxColumns());
   const display = sheet.getRange(1, 1, lastRow, maxCol).getDisplayValues();
   const rows = [];
   for (let i = 1; i < display.length; i++) {
@@ -1076,13 +1440,21 @@ function readKindWorkRows_(ss, kind) {
     const point = get(w.POINT);
     if (!point || point === '地点' || point === '地点名') continue;
     if (get(w.STATUS) === '削除') continue;
+    // 受入: 分離構成ならラボ記録から (コードで結合)。現行構成は実データシートの列から
+    let ukT = get(w.UKEIRE);
+    let ukW = get(w.UKEIRE_W);
+    if (labMap) {
+      const lr = labMap[get(w.CODE).toUpperCase()];
+      ukT = lr ? lr.ukT : '';
+      ukW = lr ? lr.ukW : '';
+    }
     rows.push([
       point,
       get(w.UD),
       get(w.DEPTH),
       get(w.SAKKO_T), get(w.SAKKO_W),
       get(w.SAISHU),  get(w.SAISHU_W),
-      get(w.UKEIRE),  get(w.UKEIRE_W)
+      ukT, ukW
     ]);
   }
   return { name: sheet.getName(), rows: rows };
@@ -1205,5 +1577,120 @@ function createV2TestBook() {
   } catch (e) {}
 
   Logger.log('テストブック作成完了: ' + ss.getUrl());
+  return ss.getUrl();
+}
+
+// ============================================================
+// テスト用: 分離構成 (SPEC_sheet_ownership.md) の模擬ブック生成
+// picker v2.10+ が作る構成を模す: 実データシート=ラボ列なし + ラボ記録ヘッダーのみ
+// GASエディタから1回実行 → 実行ログにURL
+// ============================================================
+function createV2TestBookNew() {
+  const siteId = 'TSEP';
+  const ss = SpreadsheetApp.create('【テスト】分離構成 模擬現場 (' + siteId + ')');
+
+  // ---- 件名シート ----
+  const kenmei = ss.insertSheet(SHEET_KENMEI);
+  kenmei.getRange('A1').setValue('件名');
+  kenmei.getRange('B1').setValue('分離構成テスト現場 土壌汚染調査');
+  kenmei.getRange('A2').setValue('ラベル略件名');
+  kenmei.getRange('B2').setValue('分離テスト');
+  kenmei.getRange(KENMEI_SITE_ID_LABEL_CELL).setValue('現場ID');
+  kenmei.getRange(KENMEI_SITE_ID_VALUE_CELL).setValue(siteId);
+
+  let seqS = 0, seqG = 0, seqH = 0, seqD = 0, seqWG = 0, seqWP = 0;
+  const pad = function(n) { return ('0000' + n).slice(-4); };
+
+  // ---- 表層土壌 (§3.1: 状態|地点|上下|コード|採取日時|採取担当|被覆|検測深度) ----
+  const hyoso = ss.insertSheet(SHEET_HYOSO);
+  hyoso.getRange(1, 1, 1, 8).setValues([[
+    '状態', '地点', '上下', 'コード', '採取日時', '採取担当', '被覆', '検測深度'
+  ]]).setFontWeight('bold');
+  const hyosoRows = [];
+  ['A1-1', 'A1-2①', 'A1-2②', 'B1-5'].forEach(function(pt) {
+    ['上', '下'].forEach(function(ud) {
+      seqS++;
+      hyosoRows.push(['', pt, ud, siteId + '-S-' + pad(seqS), '', '', '', '']);
+    });
+  });
+  hyoso.getRange(2, 1, hyosoRows.length, 8).setValues(hyosoRows);
+
+  // ---- 土壌ガス (§3.1: 状態|地点名|コード|削孔日時|削孔担当|採取日時|採取担当) ----
+  const gas = ss.insertSheet(SHEET_GAS);
+  gas.getRange(1, 1, 1, 7).setValues([[
+    '状態', '地点名', 'コード', '削孔日時', '削孔担当', '採取日時', '採取担当'
+  ]]).setFontWeight('bold');
+  const gasRows = [];
+  ['A1-5', 'B1-5'].forEach(function(pt) {
+    seqG++;
+    gasRows.push(['', pt, siteId + '-G-' + pad(seqG), '', '', '', '']);
+  });
+  gas.getRange(2, 1, gasRows.length, 7).setValues(gasRows);
+
+  // ---- 配管 (§3.1: 状態|地点|採取深度|コード|採取日時|採取担当|現地深度|被覆|検測) ----
+  const haikan = ss.insertSheet(SHEET_HAIKAN_NAMES[0]);
+  haikan.getRange(1, 1, 1, 9).setValues([[
+    '状態', '地点', '採取深度', 'コード', '採取日時', '採取担当', '現地深度', '被覆', '検測'
+  ]]).setFontWeight('bold');
+  const haikanRows = [];
+  [['D1-1h①', '1.00-1.50m'], ['D1-1h②', '2.00-2.50m']].forEach(function(pd) {
+    seqH++;
+    haikanRows.push(['', pd[0], pd[1], siteId + '-H-' + pad(seqH), '', '', '', '', '']);
+  });
+  haikan.getRange(2, 1, haikanRows.length, 9).setValues(haikanRows);
+
+  // ---- 深度調査 (§3.1: 状態|地点|深度|コード|採取日時|採取担当|被覆|検測) + 地下水行 ----
+  const fukado = ss.insertSheet(SHEET_FUKADO);
+  fukado.getRange(1, 1, 1, 8).setValues([[
+    '状態', '地点', '深度', 'コード', '採取日時', '採取担当', '被覆', '検測'
+  ]]).setFontWeight('bold');
+  const fukadoRows = [];
+  ['1.00m', '2.00m'].forEach(function(depth) {
+    seqD++;
+    fukadoRows.push(['', 'A1-1', depth, siteId + '-D-' + pad(seqD), '', '', '', '']);
+  });
+  seqWG++;
+  fukadoRows.push(['', 'A1-1', '', siteId + '-WG-' + pad(seqWG), '', '', '', '']);
+  seqWP++;
+  fukadoRows.push(['', 'A1-1', '', siteId + '-WP-' + pad(seqWP), '', '', '', '']);
+  fukado.getRange(2, 1, fukadoRows.length, 8).setValues(fukadoRows);
+
+  // ---- ラボ記録 (§3.2: ヘッダーのみ。picker生成を模す) ----
+  const labrec = ss.insertSheet(SHEET_LABREC);
+  const labHeader = ['コード', '地点', '種別', '現地確認日時', '現地確認担当',
+                     '受入日時', '受入担当', '風乾日時', '風乾担当',
+                     '振り日時', '振り担当', 'ろか日時', 'ろか担当',
+                     '分析日時', '分析担当', 'ラボ深度', '備考'];
+  labrec.getRange(1, 1, 1, labHeader.length).setValues([labHeader]).setFontWeight('bold');
+  labrec.setFrozenRows(1);
+
+  // ---- 分析検体 (現行と同構造) ----
+  const kentai = ss.insertSheet(SHEET_KENTAI);
+  kentai.getRange(1, 1, 1, 18).setValues([[
+    '区画', '1', '2', '3', '4', '5', '6', '7', '8', '9', '黒', '赤', '青', '種別', '検体揃い状況', '印刷日', '振りコード', 'ろかコード'
+  ]]).setFontWeight('bold');
+  const kentaiRows = [];
+  let seqL = 0;
+  ['A1-1', 'A1-2①', 'B1-5'].forEach(function(kuga) {
+    ['黒', '赤', '青'].forEach(function(color) {
+      seqL++;
+      const lcode = siteId + '-L-' + pad(seqL);
+      kentaiRows.push([kuga, '', '', '', '', '', '', '', '', '',
+                       color === '黒' ? '黒' : '', color === '赤' ? '赤' : '', color === '青' ? '青' : '',
+                       '単体', '0/1', '', lcode + '-huri', lcode + '-roka']);
+    });
+  });
+  kentai.getRange(2, 1, kentaiRows.length, 18).setValues(kentaiRows);
+
+  // デフォルトシート削除
+  try {
+    const sheets = ss.getSheets();
+    for (let i = 0; i < sheets.length; i++) {
+      const nm = sheets[i].getName();
+      if (nm === 'シート1' || nm === 'Sheet1') { ss.deleteSheet(sheets[i]); break; }
+    }
+  } catch (e) {}
+
+  Logger.log('分離構成テストブック作成完了: ' + ss.getUrl());
   return ss.getUrl();
 }
