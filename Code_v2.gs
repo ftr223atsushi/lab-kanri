@@ -342,12 +342,16 @@ function doPost(e) {
         return respond(getSaishuAll(p.spreadsheetId));
 
       // ---- 日報 ----
+      // v2.4: date (yyyy-MM-dd) を渡すと過去の日報も見れる。省略時は今日
       case 'getDailyReportData':
-        return respond(getDailyReportData(p.spreadsheetId));
+        return respond(getDailyReportData(p.spreadsheetId, p.date));
+      // v2.4: 日報シートが存在する日付の一覧 (カレンダー用)
+      case 'listDailyReportDates':
+        return respond(listDailyReportDates(p.spreadsheetId));
 
       // ---- 疎通確認 ----
       case 'ping':
-        return respond({ ok: true, message: 'pong', version: 'v2.3-labrec', time: new Date().toISOString() });
+        return respond({ ok: true, message: 'pong', version: 'v2.4-dailydate', time: new Date().toISOString() });
 
       default:
         return respond({ ok: false, message: 'unknown action: ' + action });
@@ -1308,22 +1312,56 @@ function logToDailyReport(ss, mode, point, udOrColor, worker, time) {
   sheet.appendRow([point, udOrColor, mode, timeStr, worker]);
 }
 
-function getDailyReportData(spreadsheetId) {
+/**
+ * 日報データを返す。
+ * @param {string} [date] 'yyyy-MM-dd'。省略時は今日。
+ * v2.4: 日付指定で過去の日報も見れるようにした。dates に選択可能な日付一覧も返す。
+ */
+function getDailyReportData(spreadsheetId, date) {
   try {
     const ss = openSpreadsheet_(spreadsheetId);
     const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
-    const sheet = ss.getSheetByName(today);
+    const target = (date && /^\d{4}-\d{2}-\d{2}$/.test(String(date).trim()))
+      ? String(date).trim() : today;
+    const dates = listDailyDateNames_(ss);
+    const sheet = ss.getSheetByName(target);
     if (!sheet) {
-      return { ok: false, message: '本日の日報シート ' + today + ' が見つかりません(まだ記録なし)' };
+      const isToday = (target === today);
+      return {
+        ok: false, name: target, dates: dates, isToday: isToday,
+        message: (isToday ? '本日' : target) + ' の日報はまだありません' +
+                 (dates.length ? '（記録がある日: ' + dates.slice(0, 5).join(' / ') + (dates.length > 5 ? ' …' : '') + '）' : '')
+      };
     }
     const lastRow = sheet.getLastRow();
     if (lastRow < 2) {
-      return { ok: false, message: '本日の日報シートはまだ空です' };
+      return { ok: false, name: target, dates: dates, message: target + ' の日報は空です' };
     }
     const values = sheet.getRange(1, 1, lastRow, DAILY_REPORT_HEADER.length).getDisplayValues();
     const header = values[0].map(function(v) { return String(v == null ? '' : v); });
     const rows = values.slice(1).map(function(r) { return r.map(function(v) { return String(v == null ? '' : v); }); });
-    return { ok: true, name: today, header: header, rows: rows };
+    return { ok: true, name: target, header: header, rows: rows, dates: dates, isToday: (target === today) };
+  } catch (e) {
+    return { ok: false, message: 'エラー: ' + e.message };
+  }
+}
+
+/** 日報シート名 (yyyy-MM-dd) を新しい順で返す */
+function listDailyDateNames_(ss) {
+  const out = [];
+  ss.getSheets().forEach(function(sh) {
+    const nm = sh.getName();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(nm)) out.push(nm);
+  });
+  out.sort(function(a, b) { return a < b ? 1 : (a > b ? -1 : 0); });
+  return out;
+}
+
+/** v2.4: 日報が存在する日付の一覧 (カレンダー用) */
+function listDailyReportDates(spreadsheetId) {
+  try {
+    const ss = openSpreadsheet_(spreadsheetId);
+    return { ok: true, dates: listDailyDateNames_(ss) };
   } catch (e) {
     return { ok: false, message: 'エラー: ' + e.message };
   }
