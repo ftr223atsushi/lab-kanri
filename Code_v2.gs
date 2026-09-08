@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '2.51-20260908.2024';
+const APP_VERSION = '2.53-20260909.0300';
 
 // ========== シート名 ==========
 const SHEET_HYOSO    = '表層土壌';
@@ -291,7 +291,8 @@ const DEFAULT_PASSWORD   = '1111';
 const PASSWORD_SALT      = 'shast-lab2-v2-salt';
 
 // 現場スプレッドシート共有フォルダ (picker v2 の出力先。変わったらここを更新)
-const SHARED_FOLDER_ID = '1V4zi1031hEseO3QP9iARHAhyuRDwgYaM';
+// v2.53: tanaka-app Workspaceの「shast現場」フォルダ（旧=個人側「管理 保存先」1V4zi…）
+const SHARED_FOLDER_ID = '1vy4Ot82TBo8TQMTonx6dvUXPYecXfHLu';
 
 // ========== Web App エントリ ==========
 function doGet() {
@@ -370,7 +371,8 @@ function doPost(e) {
 
 function parseSpreadsheetIdFromInput(input) {
   if (!input) return '';
-  const s = String(input).trim();
+  // shastのシート取込QR（shast:sheet:URL）をそのまま渡されても通す
+  const s = String(input).trim().replace(/^shast:sheet:/, '');
   if (!s) return '';
   const m = s.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
   if (m) return m[1];

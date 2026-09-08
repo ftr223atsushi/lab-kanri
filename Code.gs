@@ -398,6 +398,10 @@ function doPost(e) {
       case 'getSaishuData':
         return respond(getSaishuData(p.spreadsheetId));
 
+      // ---- 4種一括取得 (v10.29: 4種チップ用) ----
+      case 'getSaishuAll':
+        return respond(getSaishuAll(p.spreadsheetId));
+
       // ---- 日報・バーコード印刷 ----
       case 'getDailyReportData':
         return respond(getDailyReportData(p.spreadsheetId));
@@ -1615,6 +1619,67 @@ function getSaishuData(spreadsheetId) {
   } catch (e) {
     return { ok: false, message: 'エラー: ' + e.message };
   }
+}
+
+/**
+ * v10.29: 4種 (表層土壌/土壌ガス/配管下/深度調査) の作業シートを一括で読んで正規化して返す。
+ * APK の 採取確認ビュー・分析検体ビューの4種チップ用。1回の呼び出しで全種返すので
+ * チップ切替時に再通信不要。
+ *
+ * 正規化 rows (9列固定):
+ *   [地点, 上下, 深度, 削孔日時, 削孔担当, 採取日時, 採取担当, 受入日時, 受入担当]
+ *   種別に無い列は '' (例: ガスに深度なし、表層に削孔なし)
+ * 状態列が「削除」の行は除外。
+ */
+function getSaishuAll(spreadsheetId) {
+  try {
+    const ss = openSpreadsheet_(spreadsheetId);
+    const kinds = ['表層土壌', '土壌ガス', '配管・ピット・盛土下', '深度調査'];
+    const result = {};
+    kinds.forEach(function(kind) {
+      result[kind] = readKindWorkRows_(ss, kind);
+    });
+    return { ok: true, kinds: result };
+  } catch (e) {
+    return { ok: false, message: 'エラー: ' + e.message };
+  }
+}
+
+function readKindWorkRows_(ss, kind) {
+  const cfg = KIND_CONFIG[kind];
+  const empty = { name: (cfg && cfg.workSheet) || kind, rows: [] };
+  if (!cfg) return empty;
+  const sheet = ss.getSheetByName(cfg.workSheet);
+  if (!sheet) return empty;
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return empty;
+  const w = cfg.workCols;
+  // 読み込む最大列 = workCols の最大値
+  let maxCol = 1;
+  Object.keys(w).forEach(function(k) {
+    if (typeof w[k] === 'number' && w[k] > maxCol) maxCol = w[k];
+  });
+  const display = sheet.getRange(1, 1, lastRow, maxCol).getDisplayValues();
+  const rows = [];
+  for (let i = 1; i < display.length; i++) {
+    const r = display[i];
+    const get = function(col) {
+      if (!col || col < 1 || col > r.length) return '';
+      return String(r[col - 1] == null ? '' : r[col - 1]).trim();
+    };
+    const point = get(w.POINT);
+    if (!point || point === '地点' || point === '地点名') continue;
+    if (get(w.STATUS) === '削除') continue;
+    rows.push([
+      point,
+      get(w.UD),
+      get(w.DEPTH),
+      get(w.SAKKO_T), get(w.SAKKO_W),
+      get(w.SAISHU),  get(w.SAISHU_W),
+      get(w.UKEIRE),  get(w.UKEIRE_W)
+    ]);
+  }
+  return { name: cfg.workSheet, rows: rows };
 }
 
 function getDailyReportData(spreadsheetId) {
