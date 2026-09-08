@@ -31,6 +31,11 @@
  *  分析検体:   A区画 B〜J=1〜9 K黒 L赤 M青 N種別 O検体揃い状況 P印刷日 Q振りコード R ろかコード (旧と同じ)
  */
 
+// ========== バージョン ==========
+// 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
+// APK 側 (index.html の APP_VERSION) と揃えること
+const APP_VERSION = '2.51-20260908.2024';
+
 // ========== シート名 ==========
 const SHEET_HYOSO    = '表層土壌';
 // 配管はひな形の表記ゆれ両対応 (v2ひな形は「盛り土下」)
@@ -351,7 +356,7 @@ function doPost(e) {
 
       // ---- 疎通確認 ----
       case 'ping':
-        return respond({ ok: true, message: 'pong', version: 'v2.5-dupmsg', time: new Date().toISOString() });
+        return respond({ ok: true, message: 'pong', version: APP_VERSION, time: new Date().toISOString() });
 
       default:
         return respond({ ok: false, message: 'unknown action: ' + action });
