@@ -351,7 +351,7 @@ function doPost(e) {
 
       // ---- 疎通確認 ----
       case 'ping':
-        return respond({ ok: true, message: 'pong', version: 'v2.4-dailydate', time: new Date().toISOString() });
+        return respond({ ok: true, message: 'pong', version: 'v2.5-dupmsg', time: new Date().toISOString() });
 
       default:
         return respond({ ok: false, message: 'unknown action: ' + action });
@@ -715,13 +715,15 @@ function handlePhase1V2(ss, kind, mode, cfg, parsed, worker, force, isDeleted, r
   }
   const targetCell = sheet.getRange(foundRow, targetCol);
 
-  // 二重チェック
+  // 二重チェック (v2.5: 地点名と経過時間を出して二重スキャンを見分けられるように)
   const existing = targetCell.getValue();
   if (existing) {
-    const t = (existing instanceof Date) ? existing : new Date(existing);
+    const prevW = String(sheet.getRange(foundRow, workerCol).getDisplayValue() || '').trim();
+    const ptDisp = point + (kc.hasUd ? '(' + udDisplay(ud) + ')' : (resolved.depth ? '(' + resolved.depth + ')' : ''));
     return {
       ok: false,
-      message: mode + ' は既に記録済み: ' + Utilities.formatDate(t, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm')
+      point: point, kind: kind, mode: mode,
+      message: alreadyRecordedMsg_(mode, existing, ptDisp, prevW)
     };
   }
 
@@ -823,13 +825,17 @@ function handlePhase1Lab_(ss, labSheet, kind, mode, parsed, worker, force, isDel
 
   const targetCell = labSheet.getRange(row, cols[mc.t]);
 
-  // 二重チェック
+  // 二重チェック (v2.5: 地点名と経過時間を出して二重スキャンを見分けられるように)
   const existing = targetCell.getValue();
   if (existing) {
-    const t = (existing instanceof Date) ? existing : new Date(existing);
+    const prevW = String(labSheet.getRange(row, cols[mc.w]).getDisplayValue() || '').trim();
+    const kc0 = KIND_CONFIG[kind];
+    const ptDisp = point + ((kc0 && kc0.hasUd) ? '(' + udDisplay(resolved.ud) + ')'
+                  : (resolved.depth ? '(' + resolved.depth + ')' : (isWater ? '(地下水)' : '')));
     return {
       ok: false,
-      message: mc.label + ' は既に記録済み: ' + Utilities.formatDate(t, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm')
+      point: point, kind: kind, mode: mode,
+      message: alreadyRecordedMsg_(mc.label, existing, ptDisp, prevW)
     };
   }
 
@@ -926,13 +932,15 @@ function handlePhase2Lab_(ss, labSheet, mode, parsed, worker, force, autoSwitche
 
   const targetCell = labSheet.getRange(row, cols[mc.t]);
 
-  // 二重チェック
+  // 二重チェック (v2.5: 区画名・色と経過時間を出す)
   const existing = targetCell.getValue();
   if (existing) {
-    const t = (existing instanceof Date) ? existing : new Date(existing);
+    const prevW = String(labSheet.getRange(row, cols[mc.w]).getDisplayValue() || '').trim();
+    const ptDisp = (info.point || parsed.baseCode) + (info.color ? ' ' + info.color : '');
     return {
       ok: false,
-      message: mc.label + ' は既に記録済み: ' + Utilities.formatDate(t, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm')
+      point: info.point || parsed.baseCode, mode: mode,
+      message: alreadyRecordedMsg_(mc.label, existing, ptDisp, prevW)
     };
   }
 
@@ -1066,6 +1074,31 @@ function formatDepthRange_(input) {
   return num.toFixed(2) + '-' + (num + 0.5).toFixed(2) + 'm';
 }
 
+/**
+ * v2.5: 「既に記録済み」メッセージを作る。
+ * 地点名と「何分前か」を入れて、二重スキャン (直前) と過去の記録を見分けられるようにする。
+ * @param {string} modeLabel 工程名
+ * @param {*} existing セルの既存値 (Date or 文字列)
+ * @param {string} pointDisp 地点表示 (例: "A1-1(上)")
+ * @param {string} [worker] 記録した担当者
+ */
+function alreadyRecordedMsg_(modeLabel, existing, pointDisp, worker) {
+  const t = (existing instanceof Date) ? existing : new Date(existing);
+  const valid = t && !isNaN(t.getTime());
+  const when = valid ? Utilities.formatDate(t, 'Asia/Tokyo', 'MM/dd HH:mm') : String(existing);
+  let ago = '';
+  if (valid) {
+    const diffMin = Math.floor((Date.now() - t.getTime()) / 60000);
+    if (diffMin < 1)        ago = '（たった今）';
+    else if (diffMin < 60)  ago = '（' + diffMin + '分前）';
+    else if (diffMin < 1440) ago = '（' + Math.floor(diffMin / 60) + '時間前）';
+    else                    ago = '（' + Math.floor(diffMin / 1440) + '日前）';
+  }
+  const who = worker ? ' ' + worker : '';
+  const pt = pointDisp ? pointDisp + ' は' : '';
+  return pt + modeLabel + '記録済み: ' + when + ago + who;
+}
+
 function phase1ColName(colKey) {
   switch (colKey) {
     case 'SAKKO_T':   return '削孔';
@@ -1144,13 +1177,15 @@ function handlePhase2V2(ss, mode, cfg, parsed, worker, force, autoSwitched) {
   const workerCol = COL_ZENSHORI[cfg.workerCol];
   const targetCell = sheet.getRange(foundRow, targetCol);
 
-  // 二重チェック
+  // 二重チェック (v2.5: 区画名・色と経過時間を出す)
   const existing = targetCell.getValue();
   if (existing) {
-    const t = (existing instanceof Date) ? existing : new Date(existing);
+    const prevW = String(sheet.getRange(foundRow, workerCol).getDisplayValue() || '').trim();
+    const ptDisp = (kentaiPoint || parsed.baseCode) + (kentaiColor ? ' ' + kentaiColor : '');
     return {
       ok: false,
-      message: mode + ' は既に記録済み: ' + Utilities.formatDate(t, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm')
+      point: kentaiPoint || parsed.baseCode, mode: mode,
+      message: alreadyRecordedMsg_(mode, existing, ptDisp, prevW)
     };
   }
 
