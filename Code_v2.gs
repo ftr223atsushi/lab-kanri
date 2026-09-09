@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '2.55-20260909.1148';
+const APP_VERSION = '2.56-20260909.1501';
 
 // ========== シート名 ==========
 const SHEET_HYOSO    = '表層土壌';
@@ -360,6 +360,11 @@ function doPost(e) {
         return respond(getLabelSiteName(p.spreadsheetId));
       case 'setLabelSiteName':
         return respond(setLabelSiteName(p.spreadsheetId, p.name));
+      // v2.56: 揃いラベルの二度刷り防止
+      case 'getLabelPrinted':
+        return respond(getLabelPrinted(p.spreadsheetId));
+      case 'markCodeLabelPrinted':
+        return respond(markCodeLabelPrinted(p.spreadsheetId, p.codes));
 
       // ---- 疎通確認 ----
       case 'ping':
@@ -1397,6 +1402,81 @@ function getLabelSiteName(spreadsheetId) {
     let suggest = '';
     try { suggest = SpreadsheetApp.openById(id).getName().slice(0, 8); } catch (e) {}
     return { ok: true, name: suggest, saved: false };
+  } catch (e) {
+    return { ok: false, message: 'エラー: ' + e.message };
+  }
+}
+
+// ========== 揃いラベル (機能B) の印刷履歴 ==========
+// 3日/7日で遡ると同じ検体を二度刷りしかねないので、刷ったコードを覚えておく。
+// キーは接尾辞まで含めた文字列 (BQYR-L-0006-roka)。ろかと振りは別扱い。
+// 置き場は lab-kanri 専用の新しいシート (分析検体シートは picker のもの)。
+const SHEET_LABELLOG = 'ラベル印刷履歴';
+const LABELLOG_HEADER = ['コード', '印刷日時'];
+
+function getLabelLogSheet_(ss, createIfMissing) {
+  let sheet = ss.getSheetByName(SHEET_LABELLOG);
+  if (!sheet && createIfMissing) {
+    sheet = ss.insertSheet(SHEET_LABELLOG);
+    sheet.getRange(1, 1, 1, LABELLOG_HEADER.length).setValues([LABELLOG_HEADER])
+      .setFontWeight('bold');
+    sheet.setFrozenRows(1);
+    sheet.setColumnWidth(1, 200);
+    sheet.setColumnWidth(2, 140);
+  }
+  return sheet;
+}
+
+/** 刷ったことのあるコード一覧を { コード: 印刷日時 } で返す。 */
+function getLabelPrinted(spreadsheetId) {
+  try {
+    const ss = openSpreadsheet_(spreadsheetId);
+    const sheet = getLabelLogSheet_(ss, false);
+    const map = {};
+    if (!sheet || sheet.getLastRow() < 2) return { ok: true, map: map };
+    const v = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getDisplayValues();
+    v.forEach(function(r) {
+      const code = String(r[0] || '').trim();
+      if (code) map[code] = String(r[1] || '').trim();
+    });
+    return { ok: true, map: map };
+  } catch (e) {
+    return { ok: false, message: 'エラー: ' + e.message };
+  }
+}
+
+/** 刷ったコードを記録する (既にあれば日時を更新、無ければ追記)。 */
+function markCodeLabelPrinted(spreadsheetId, codes) {
+  try {
+    const list = (codes || []).map(function(c) { return String(c || '').trim(); })
+      .filter(Boolean);
+    if (!list.length) return { ok: false, message: '対象のコードがありません' };
+    const ss = openSpreadsheet_(spreadsheetId);
+    const sheet = getLabelLogSheet_(ss, true);
+    const stamp = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm');
+
+    const last = sheet.getLastRow();
+    const rowOf = {};
+    if (last >= 2) {
+      sheet.getRange(2, 1, last - 1, 1).getDisplayValues().forEach(function(r, i) {
+        const code = String(r[0] || '').trim();
+        if (code) rowOf[code] = i + 2;
+      });
+    }
+    const append = [];
+    list.forEach(function(code) {
+      if (rowOf[code]) {
+        sheet.getRange(rowOf[code], 2).setNumberFormat('@').setValue(stamp);
+      } else if (append.indexOf(code) < 0) {
+        append.push(code);
+      }
+    });
+    if (append.length) {
+      const start = sheet.getLastRow() + 1;
+      sheet.getRange(start, 1, append.length, 2).setNumberFormat('@')
+        .setValues(append.map(function(c) { return [c, stamp]; }));
+    }
+    return { ok: true, count: list.length, stamp: stamp };
   } catch (e) {
     return { ok: false, message: 'エラー: ' + e.message };
   }
