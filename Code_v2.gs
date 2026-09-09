@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '2.61-20260909.1608';
+const APP_VERSION = '2.62-20260909.1712';
 
 // ========== シート名 ==========
 const SHEET_HYOSO    = '表層土壌';
@@ -240,7 +240,14 @@ function getKentaiCols_(sheet) {
     ao:    find(function(h) { return h === '青'; }),
     soroi: find(function(h) { return /揃い/.test(h); }),
     huri:  find(function(h) { return /振り/.test(h) && /コード/.test(h); }),
-    roka:  find(function(h) { return /(ろか|ろ過|濾過)/.test(h) && /コード/.test(h); })
+    roka:  find(function(h) { return /(ろか|ろ過|濾過)/.test(h) && /コード/.test(h); }),
+    // v2.62: 振り/ろか/分析の記録先。picker が追加する6列 (無ければ0)
+    HURI_T:    find(function(h) { return h === '振り日時'; }),
+    HURI_W:    find(function(h) { return h === '振り担当'; }),
+    ROKA_T:    find(function(h) { return h === 'ろか日時' || h === 'ろ過日時'; }),
+    ROKA_W:    find(function(h) { return h === 'ろか担当' || h === 'ろ過担当'; }),
+    BUNSEKI_T: find(function(h) { return h === '分析日時'; }),
+    BUNSEKI_W: find(function(h) { return h === '分析担当'; })
   };
   // 見出しが空でも、末尾 -HURI / -ROKA の列を実データから探す
   if (!cols.huri || !cols.roka) {
@@ -271,13 +278,16 @@ function getKentaiCols_(sheet) {
  * 分析検体シートの 振り/ろか コード列からLコードの行を探し、区画名と色を返す。
  */
 function lookupKentaiByLCode_(ss, baseCode) {
-  const out = { point: '', color: '' };
+  // v2.62: 行番号と列位置も返す (振り/ろか/分析をこのシートに書くため)
+  const out = { point: '', color: '', row: 0, sheet: null, cols: null };
   try {
     const ks = ss.getSheetByName(SHEET_KENTAI);
     if (!ks) return out;
     const lastRow = ks.getLastRow();
     if (lastRow < 2) return out;
     const c = getKentaiCols_(ks);
+    out.sheet = ks;
+    out.cols = c;
     const data = ks.getRange(2, 1, lastRow - 1, c.lastCol).getDisplayValues();
     const targetHuri = (baseCode + '-HURI');
     const targetRoka = (baseCode + '-ROKA');
@@ -288,6 +298,7 @@ function lookupKentaiByLCode_(ss, baseCode) {
       const q = cell(data[i], c.huri).toUpperCase();
       const r = cell(data[i], c.roka).toUpperCase();
       if (q === targetHuri || r === targetRoka) {
+        out.row = i + 2;
         out.point = cell(data[i], c.kuga);
         if (cell(data[i], c.kuro)) out.color = '黒';
         else if (cell(data[i], c.aka)) out.color = '赤';
@@ -555,9 +566,55 @@ function findCodeAcrossSheets_(ss, baseCode) {
   return null;
 }
 
+// ========== 実データシートの列解決 (v2.62: 見出し式) ==========
+// picker が列を足しても壊れないよう、列番号の決め打ちをやめて見出し名で引く。
+// 見出しが見つからない列は KIND_CONFIG.workCols の従来位置に落とす
+// (現地確認の2列を picker が足す前でも今まで通り動かすため)。
+const WORKCOL_HEADERS = {
+  STATUS:       ['状態'],
+  POINT:        ['地点名', '地点'],
+  UD:           ['上下'],
+  DEPTH:        ['深度', '採取深度'],
+  CODE:         ['コード'],
+  SAKKO_T:      ['削孔日時'],          SAKKO_W:   ['削孔担当'],
+  SAISHU:       ['採取日時'],          SAISHU_W:  ['採取担当'],
+  // v2.62: lab-kanri が書く列。shast が書く「採取日時」とは別物
+  GENCHI_T:     ['現地確認日時'],      GENCHI_W:  ['現地確認担当'],
+  UKEIRE:       ['受入日時', '受け入れ日時', '受入'],
+  UKEIRE_W:     ['受入担当', '受け入れ担当'],
+  FUKAN:        ['風乾日時', '風乾'],  FUKAN_W:   ['風乾担当'],
+  BUNSEKI_T:    ['分析日時', '分析'],  BUNSEKI_W: ['分析担当'],
+  GENCHI_DEPTH: ['現地深度']
+};
+
+/**
+ * 実データシートの列を見出しで引く。1始まりの列番号を返す。
+ * 見つからない名前は従来の位置のまま (無い列は 0)。
+ */
+function resolveWorkCols_(sheet, kc) {
+  const lastCol = Math.max(sheet.getLastColumn(), 1);
+  let header = [];
+  try {
+    header = sheet.getRange(1, 1, 1, lastCol).getDisplayValues()[0]
+      .map(function(v) { return String(v == null ? '' : v).trim(); });
+  } catch (e) {}
+  const cols = {};
+  // まず従来の位置を土台にする (見出しが無い現場でも今まで通り動く)
+  Object.keys(kc.workCols).forEach(function(k) { cols[k] = kc.workCols[k]; });
+  // 見出しで見つかったものだけ上書き
+  Object.keys(WORKCOL_HEADERS).forEach(function(k) {
+    const names = WORKCOL_HEADERS[k];
+    for (let i = 0; i < header.length; i++) {
+      if (names.indexOf(header[i]) >= 0) { cols[k] = i + 1; return; }
+    }
+  });
+  cols.__lastCol = lastCol;
+  return cols;
+}
+
 /**
  * 実データシートのコード列で直接行を引く (v2の1回引き)。
- * @return {Object|null} { row, sheet, point, ud, depth, status, extra } または null
+ * @return {Object|null} { row, sheet, cols, point, ud, depth, status, extra } または null
  */
 function resolveByCode_(ss, kind, baseCode) {
   const kc = KIND_CONFIG[kind];
@@ -568,12 +625,12 @@ function resolveByCode_(ss, kind, baseCode) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return null;
 
+  const cols = resolveWorkCols_(sheet, kc);
   let maxCol = 1;
-  Object.keys(kc.workCols).forEach(function(k) {
-    if (kc.workCols[k] > maxCol) maxCol = kc.workCols[k];
+  Object.keys(cols).forEach(function(k) {
+    if (k !== '__lastCol' && cols[k] > maxCol) maxCol = cols[k];
   });
-  // 分離構成の実データシートはラボ列が無く列数が少ない → シート実列数にクランプ
-  maxCol = Math.min(maxCol, sheet.getMaxColumns());
+  maxCol = Math.min(Math.max(maxCol, cols.__lastCol), sheet.getMaxColumns());
   const disp = sheet.getRange(2, 1, lastRow - 1, maxCol).getDisplayValues();
   const target = String(baseCode).trim().toUpperCase();
 
@@ -582,16 +639,17 @@ function resolveByCode_(ss, kind, baseCode) {
     const cell = function(col) {
       return (col && col >= 1 && col <= r.length) ? String(r[col - 1]).trim() : '';
     };
-    const codeVal = cell(kc.workCols.CODE).toUpperCase();
+    const codeVal = cell(cols.CODE).toUpperCase();
     if (codeVal !== target) continue;
     return {
       row: i + 2,
       sheet: sheet,
-      point:  cell(kc.workCols.POINT),
-      ud:     cell(kc.workCols.UD),
-      depth:  cell(kc.workCols.DEPTH),
-      status: cell(kc.workCols.STATUS),
-      extra:  kc.extraCol ? cell(kc.workCols[kc.extraCol]) : ''
+      cols: cols,
+      point:  cell(cols.POINT),
+      ud:     cell(cols.UD),
+      depth:  cell(cols.DEPTH),
+      status: cell(cols.STATUS),
+      extra:  kc.extraCol ? cell(cols[kc.extraCol]) : ''
     };
   }
   return null;
@@ -656,25 +714,29 @@ function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker, conf
     let autoSwitched = false;
 
     // ---- 振り/ろか/分析 (v2: Lコード / 旧形式: 色文字+suffix コード) ----
+    // v2.62: 振りコードを廃止し、ろかコード1本をラボ内で使い回す方針になった。
+    // そのため接尾辞で工程を決めるのをやめ、他の工程と同じくモードボタンで決める。
+    // (以前は -roka を読むと必ず「ろか」に切り替わっていたので、振りが記録できなくなる)
     if (parsed.codeType === 'L' || (parsed.format === 'legacy' && parsed.suffix)) {
-      if (!parsed.suffix) {
-        return { ok: false, message: 'Lコードは -huri / -roka 付きで読んでください' };
-      }
-      if (parsed.suffix === 'roka' && mode === '分析') {
-        effectiveMode = '分析';
-      } else {
-        const auto = SUFFIX_TO_MODE[parsed.suffix];
-        if (effectiveMode !== auto) {
-          autoSwitched = true;
-          effectiveMode = auto;
-        }
+      const PHASE2_MODES = ['振り', 'ろか', '分析'];
+      if (PHASE2_MODES.indexOf(effectiveMode) < 0) {
+        return {
+          ok: false,
+          message: '分析検体のコードです。振り / ろか / 分析 のどれかを選んでください (現在: ' +
+                   (effectiveMode || '未選択') + ')'
+        };
       }
       const cfg2 = MODES[effectiveMode];
       if (cfg2.requireWorkers && cfg2.requireWorkers.indexOf(worker) < 0) {
         return { ok: false, message: '分析モードは ' + cfg2.requireWorkers.join('・') + ' のみ使用できます (現在: ' + worker + ')' };
       }
-      // 分離構成: 振り/ろか/分析はラボ記録へ (現行構成は従来の前処理シート)
-      if (labSheet) {
+      // v2.62: 振り/ろか/分析は分析検体シートが正本。
+      // handlePhase2V2 が「分析検体に記録列があればそちら、無ければ前処理シート」を判断する。
+      // ラボ記録シートを使う旧案は取り下げたので、分析検体に列がある時はそちらを優先する
+      const kInfo = lookupKentaiByLCode_(ss, parsed.baseCode);
+      const kentaiReady = !!(kInfo.row && kInfo.cols &&
+                             kInfo.cols[cfg2.col] && kInfo.cols[cfg2.workerCol]);
+      if (labSheet && !kentaiReady) {
         return handlePhase2Lab_(ss, labSheet, effectiveMode, parsed, worker, force, autoSwitched);
       }
       return handlePhase2V2(ss, effectiveMode, cfg2, parsed, worker, force, autoSwitched);
@@ -782,11 +844,21 @@ function handlePhase1V2(ss, kind, mode, cfg, parsed, worker, force, isDeleted, r
     return { ok: false, message: 'コード ' + parsed.baseCode + ' の行に地点名がありません' };
   }
 
-  const targetCol = kc.workCols[cfg.col];
-  const workerCol = kc.workCols[cfg.workerCol];
+  // v2.62: 見出しで解決した列を使う (無ければ従来位置)
+  const cols = resolved.cols || kc.workCols;
+  // 採取モードは「現地確認日時」列があればそちらへ書く。
+  // shast が書く「採取日時」とは別物なので、列を分けて取り合いを無くす。
+  // 列がまだ無い現場では従来どおり採取列に書く (picker の追加を待たずに動かすため)
+  let colKey = cfg.col, workerKey = cfg.workerCol;
+  if (mode === '採取' && cols.GENCHI_T && cols.GENCHI_W) {
+    colKey = 'GENCHI_T'; workerKey = 'GENCHI_W';
+  }
+  const targetCol = cols[colKey];
+  const workerCol = cols[workerKey];
   if (!targetCol || !workerCol) {
     return { ok: false, message: kind + ' は ' + mode + ' モードに未対応です' };
   }
+  const modeLabel = (colKey === 'GENCHI_T') ? '現地確認' : mode;
   const targetCell = sheet.getRange(foundRow, targetCol);
 
   // 二重チェック (v2.5: 地点名と経過時間を出して二重スキャンを見分けられるように)
@@ -797,7 +869,7 @@ function handlePhase1V2(ss, kind, mode, cfg, parsed, worker, force, isDeleted, r
     return {
       ok: false,
       point: point, kind: kind, mode: mode,
-      message: alreadyRecordedMsg_(mode, existing, ptDisp, prevW)
+      message: alreadyRecordedMsg_(modeLabel, existing, ptDisp, prevW)
     };
   }
 
@@ -807,7 +879,7 @@ function handlePhase1V2(ss, kind, mode, cfg, parsed, worker, force, isDeleted, r
     ? modeOverride.prevCol
     : cfg.prevCol;
   if (effectivePrevCol) {
-    const prevCol = kc.workCols[effectivePrevCol];
+    const prevCol = cols[effectivePrevCol];
     if (prevCol) {
       const prevVal = sheet.getRange(foundRow, prevCol).getValue();
       if (!prevVal) {
@@ -842,8 +914,8 @@ function handlePhase1V2(ss, kind, mode, cfg, parsed, worker, force, isDeleted, r
       let dailyBCol = '';
       if (kc.hasUd) dailyBCol = udDisplay(ud);
       else if (isWater) dailyBCol = '地下水';
-      else if (kc.workCols.DEPTH) dailyBCol = resolved.depth || '';
-      logToDailyReport(ss, mode, point, dailyBCol, worker, now);
+      else if (cols.DEPTH) dailyBCol = resolved.depth || '';
+      logToDailyReport(ss, modeLabel, point, dailyBCol, worker, now);
     } catch (e) {}
   }
 
@@ -873,9 +945,9 @@ function handlePhase1V2(ss, kind, mode, cfg, parsed, worker, force, isDeleted, r
   const delTag = isDeleted ? ' [削除地点・赤文字]' : '';
   return {
     ok: true,
-    message: mode + ' 記録完了: ' + point + udDispMsg + ' 担当:' + worker + delTag,
+    message: modeLabel + ' 記録完了: ' + point + udDispMsg + ' 担当:' + worker + delTag,
     kind: kind,
-    mode: mode, autoMode: null,
+    mode: mode, modeLabel: modeLabel, autoMode: null,
     point: point, ud: ud, worker: worker,
     isDeleted: isDeleted,
     needExtra: needExtra,
@@ -1193,11 +1265,71 @@ function phase1ColName(colKey) {
  * 行の同定: Lコード (TEDC-L-0001)。分析検体シートの Q列(振り)/R列(ろか) から
  * 区画名と色を補足して記録する (見つからなくても記録は続行)。
  */
+/**
+ * v2.62: 振り/ろか/分析 を分析検体シートの行に直接書く。
+ * 混合すると複数地点が1検体になるので、実データシートの行では表せない。
+ * 分析検体シートの1行がその検体そのものなので、そこが正本。
+ * 行は必ず既にある (picker が作る) ので追記はしない。
+ */
+function handlePhase2Kentai_(ss, info, mode, cfg, parsed, worker, force, autoSwitched) {
+  const sheet = info.sheet;
+  const row = info.row;
+  const c = info.cols;
+  const targetCell = sheet.getRange(row, c[cfg.col]);
+  const ptDisp = (info.point || parsed.baseCode) + (info.color ? ' ' + info.color : '');
+
+  // 二重チェック
+  const existing = targetCell.getValue();
+  if (existing) {
+    const prevW = String(sheet.getRange(row, c[cfg.workerCol]).getDisplayValue() || '').trim();
+    return {
+      ok: false,
+      point: info.point || parsed.baseCode, mode: mode,
+      message: alreadyRecordedMsg_(mode, existing, ptDisp, prevW)
+    };
+  }
+
+  // 順番チェック (前工程の列がある時だけ)
+  if (cfg.prevCol && c[cfg.prevCol]) {
+    const prevVal = sheet.getRange(row, c[cfg.prevCol]).getValue();
+    if (!prevVal && !force) {
+      return {
+        ok: false, needConfirm: true,
+        message: (cfg.prevLabel || '前工程') + ' が完了していませんが ' + mode + ' を記録しますか？',
+        mode: mode, code: parsed.baseCode + (parsed.suffix ? '-' + parsed.suffix : ''),
+        autoMode: null
+      };
+    }
+  }
+
+  const now = new Date();
+  targetCell.setValue(now);
+  targetCell.setNumberFormat('yyyy/MM/dd HH:mm');
+  sheet.getRange(row, c[cfg.workerCol]).setValue(worker);
+
+  try { logToDailyReport(ss, mode, info.point || parsed.baseCode, info.color, worker, now); } catch (e) {}
+
+  return {
+    ok: true,
+    message: mode + ' 記録完了: ' + ptDisp + ' 担当:' + worker,
+    mode: mode, autoMode: null,
+    point: info.point || parsed.baseCode, color: info.color, worker: worker,
+    time: Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm:ss')
+  };
+}
+
 function handlePhase2V2(ss, mode, cfg, parsed, worker, force, autoSwitched) {
   // v2.58: 同じ処理が2か所にあったので lookupKentaiByLCode_ に寄せた (見出し式)
   const kentaiInfo = lookupKentaiByLCode_(ss, parsed.baseCode);
   const kentaiPoint = kentaiInfo.point;
   const kentaiColor = kentaiInfo.color;
+
+  // v2.62: 分析検体シートに記録列があればそこへ書く (混合検体の正本はこの行)。
+  // 列が無い現場では従来の前処理シートに落とす
+  if (kentaiInfo.row && kentaiInfo.cols &&
+      kentaiInfo.cols[cfg.col] && kentaiInfo.cols[cfg.workerCol]) {
+    return handlePhase2Kentai_(ss, kentaiInfo, mode, cfg, parsed, worker, force, autoSwitched);
+  }
 
   // 前処理シート (無ければ作成)
   let sheet = ss.getSheetByName(SHEET_ZENSHORI);
@@ -1684,13 +1816,12 @@ function readKindWorkRows_(ss, kind, labMap) {
   if (!sheet) return empty;
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return empty;
-  const w = cfg.workCols;
+  const w = resolveWorkCols_(sheet, cfg);   // v2.62: 見出し式
   let maxCol = 1;
   Object.keys(w).forEach(function(k) {
-    if (typeof w[k] === 'number' && w[k] > maxCol) maxCol = w[k];
+    if (k !== '__lastCol' && typeof w[k] === 'number' && w[k] > maxCol) maxCol = w[k];
   });
-  // 分離構成の実データシートは列数が少ない → シート実列数にクランプ
-  maxCol = Math.min(maxCol, sheet.getMaxColumns());
+  maxCol = Math.min(Math.max(maxCol, w.__lastCol), sheet.getMaxColumns());
   const display = sheet.getRange(1, 1, lastRow, maxCol).getDisplayValues();
   const rows = [];
   for (let i = 1; i < display.length; i++) {
@@ -1716,7 +1847,11 @@ function readKindWorkRows_(ss, kind, labMap) {
       get(w.DEPTH),
       get(w.SAKKO_T), get(w.SAKKO_W),
       get(w.SAISHU),  get(w.SAISHU_W),
-      ukT, ukW
+      ukT, ukW,
+      // v2.62: 末尾に追加 (既存の 0〜8 は動かさない)。
+      //  9=コード ガスのラベル印刷に要る / 10,11=現地確認
+      get(w.CODE),
+      get(w.GENCHI_T), get(w.GENCHI_W)
     ]);
   }
   return { name: sheet.getName(), rows: rows };
