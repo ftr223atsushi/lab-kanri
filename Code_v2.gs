@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '2.64-20260909.2211';
+const APP_VERSION = '2.65-20260909.2256';
 
 // ========== シート名 ==========
 const SHEET_HYOSO    = '表層土壌';
@@ -67,7 +67,9 @@ const KIND_CONFIG = {
     availableModes: ['削孔', '採取', '受入', '分析'],
     modeOverrides: {
       '削孔': { prevCol: null },
-      '採取': { prevCol: 'SAKKO_T' },
+      // v2.65: 削孔チェックを外した。削孔は現場(shast)の記録で lab-kanri は書かないので、
+      // 「削孔が未記録」で現地確認が止まってしまう。役割が分かれた以上ここは見ない
+      '採取': { prevCol: null },
       '受入': { prevCol: null },
       '分析': { prevCol: 'UKEIRE' }
     },
