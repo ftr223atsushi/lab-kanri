@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '2.65-20260909.2256';
+const APP_VERSION = '2.66-20260909.2322';
 
 // ========== シート名 ==========
 const SHEET_HYOSO    = '表層土壌';
@@ -169,7 +169,7 @@ const LABREC_MODE = {
   '受入': { t: LABREC_H.UKEIRE_T, w: LABREC_H.UKEIRE_W, prev: null, label: '受入' },
   '風乾': { t: LABREC_H.FUKAN_T, w: LABREC_H.FUKAN_W, prev: LABREC_H.UKEIRE_T, prevLabel: '受入', strict: true, label: '風乾' },
   '振り': { t: LABREC_H.HURI_T, w: LABREC_H.HURI_W, prev: null, label: '振り' },
-  'ろか': { t: LABREC_H.ROKA_T, w: LABREC_H.ROKA_W, prev: LABREC_H.HURI_T, prevLabel: '振り', strict: false, label: 'ろか' },
+  'ろか': { t: LABREC_H.ROKA_T, w: LABREC_H.ROKA_W, prev: null, strict: false, label: 'ろか' },
   '分析': { t: LABREC_H.BUNSEKI_T, w: LABREC_H.BUNSEKI_W, prev: LABREC_H.ROKA_T, prevLabel: 'ろか', strict: false, label: '分析', requireWorkers: ['早川', '山口'] }
 };
 
@@ -336,9 +336,11 @@ const MODES = {
     prevCol: null, prevLabel: null, strict: false
   },
   'ろか': {
+    // v2.66: 振りをやらない検体があるので、振りの未記録チェックを外した。
+    // 以前は毎回「振りが完了していませんが記録しますか？」の確認が出ていた
     phase: 2, expectedSuffix: 'roka',
     col: 'ROKA_T', workerCol: 'ROKA_W',
-    prevCol: 'HURI_T', prevLabel: '振り', strict: false
+    prevCol: null, prevLabel: null, strict: false
   },
   '分析': {
     phase: 2, expectedSuffix: 'roka',
