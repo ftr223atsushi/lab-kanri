@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '2.62-20260909.1712';
+const APP_VERSION = '2.64-20260909.2211';
 
 // ========== シート名 ==========
 const SHEET_HYOSO    = '表層土壌';
@@ -684,9 +684,11 @@ function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker, conf
       return { ok: false, message: e.message };
     }
 
-    // 分離構成判別 (SPEC_sheet_ownership.md §4-4): ラボ記録シートの有無
-    // あり = 分離構成 (ラボ工程はラボ記録へ書く) / なし = 現行構成 (従来どおり実データシートへ)
-    const labSheet = ss.getSheetByName(SHEET_LABREC);
+    // v2.64: ラボ記録タブ案は取り下げた。現地確認・受入・風乾は実データタブへ、
+    // 振り・ろか・分析は分析検体タブへ直接書く。
+    // 作りかけの「ラボ記録」タブが残っていると分離構成と誤判定して
+    // 「見出し『コード』が見つかりません」で止まるので、もう参照しない。
+    const labSheet = null;
 
     // 担当者 (端末ローカルから毎回送信される)
     const worker = (overrideWorker && String(overrideWorker).trim()) ? String(overrideWorker).trim() : '';
@@ -1484,7 +1486,15 @@ function getSpreadsheetMeta(spreadsheetId) {
       return { ok: false, message: 'このブックは旧方式です (件名B12に現場IDなし)。旧アプリ「shast LAB」で開いてください' };
     }
     // structure: 分離構成 (ラボ記録あり) or 現行構成
-    const structure = ss.getSheetByName(SHEET_LABREC) ? '分離構成' : '現行構成';
+    // v2.64: 分離構成(ラボ記録タブ)は廃止。実データタブに現地確認列があるかで判定する
+    let structure = '現行構成';
+    try {
+      const hy = getKindSheet_(ss, '表層土壌');
+      if (hy) {
+        const hc = resolveWorkCols_(hy, KIND_CONFIG['表層土壌']);
+        if (hc.GENCHI_T) structure = '現地確認あり';
+      }
+    } catch (e) {}
     return { ok: true, id: ss.getId(), name: ss.getName(), url: ss.getUrl(), siteId: siteId, structure: structure };
   } catch (e) {
     return { ok: false, message: 'スプレッドシートを開けません: ' + e.message };
@@ -1787,6 +1797,9 @@ function getSaishuAll(spreadsheetId) {
  * 現行構成 (ラボ記録なし) は null を返す。
  */
 function buildLabUkeireMap_(ss) {
+  // v2.64: ラボ記録タブ案は取り下げ。受入は実データタブの列から読む
+  return null;
+  /* eslint-disable no-unreachable */
   const labSheet = ss.getSheetByName(SHEET_LABREC);
   if (!labSheet) return null;
   const map = {};
