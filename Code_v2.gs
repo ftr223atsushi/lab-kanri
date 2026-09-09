@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '2.57-20260909.1511';
+const APP_VERSION = '2.58-20260909.1521';
 
 // ========== シート名 ==========
 const SHEET_HYOSO    = '表層土壌';
@@ -216,7 +216,59 @@ function findOrAppendLabRow_(sheet, cols, baseCode, point, kindLabel) {
 }
 
 /**
- * 分析検体シートの Q(振り)/R(ろか) 列からLコードの行を探し、区画名と色を返す。
+ * v2.58: 分析検体シートの列を見出しで引く。picker が列を足しても効くようにする。
+ *
+ * 振り/ろかコードの列は見出しが無いことがあるので、次の順で探す。
+ *   1. 見出し名 (「振りコード」「ろかコード」など)
+ *   2. 実データの形 (末尾が -HURI / -ROKA)
+ *   3. 従来の位置 (Q列 / R列)
+ * 返すのは1始まりの列番号。
+ */
+function getKentaiCols_(sheet) {
+  const lastCol = Math.max(sheet.getLastColumn(), 1);
+  const header = sheet.getRange(1, 1, 1, lastCol).getDisplayValues()[0]
+    .map(function(v) { return String(v == null ? '' : v).trim(); });
+  const find = function(pred) {
+    for (let i = 0; i < header.length; i++) { if (pred(header[i])) return i + 1; }
+    return 0;
+  };
+  const cols = {
+    lastCol: lastCol,
+    kuga:  find(function(h) { return h === '区画'; }),
+    kuro:  find(function(h) { return h === '黒'; }),
+    aka:   find(function(h) { return h === '赤'; }),
+    ao:    find(function(h) { return h === '青'; }),
+    soroi: find(function(h) { return /揃い/.test(h); }),
+    huri:  find(function(h) { return /振り/.test(h) && /コード/.test(h); }),
+    roka:  find(function(h) { return /(ろか|ろ過|濾過)/.test(h) && /コード/.test(h); })
+  };
+  // 見出しが空でも、末尾 -HURI / -ROKA の列を実データから探す
+  if (!cols.huri || !cols.roka) {
+    const n = Math.min(Math.max(sheet.getLastRow() - 1, 0), 50);
+    if (n > 0) {
+      const data = sheet.getRange(2, 1, n, lastCol).getDisplayValues();
+      for (let r = 0; r < data.length && (!cols.huri || !cols.roka); r++) {
+        for (let i = 0; i < data[r].length; i++) {
+          const v = String(data[r][i] == null ? '' : data[r][i]).trim().toUpperCase();
+          if (!cols.huri && /-HURI$/.test(v)) cols.huri = i + 1;
+          if (!cols.roka && /-ROKA$/.test(v)) cols.roka = i + 1;
+        }
+      }
+    }
+  }
+  // どうしても見つからない時だけ、従来の決め打ちに落とす
+  if (!cols.kuga)  cols.kuga  = 1;    // A
+  if (!cols.kuro)  cols.kuro  = 11;   // K
+  if (!cols.aka)   cols.aka   = 12;   // L
+  if (!cols.ao)    cols.ao    = 13;   // M
+  if (!cols.soroi) cols.soroi = 15;   // O
+  if (!cols.huri)  cols.huri  = 17;   // Q
+  if (!cols.roka)  cols.roka  = 18;   // R
+  return cols;
+}
+
+/**
+ * 分析検体シートの 振り/ろか コード列からLコードの行を探し、区画名と色を返す。
  */
 function lookupKentaiByLCode_(ss, baseCode) {
   const out = { point: '', color: '' };
@@ -225,17 +277,21 @@ function lookupKentaiByLCode_(ss, baseCode) {
     if (!ks) return out;
     const lastRow = ks.getLastRow();
     if (lastRow < 2) return out;
-    const data = ks.getRange(2, 1, lastRow - 1, 18).getDisplayValues();
+    const c = getKentaiCols_(ks);
+    const data = ks.getRange(2, 1, lastRow - 1, c.lastCol).getDisplayValues();
     const targetHuri = (baseCode + '-HURI');
     const targetRoka = (baseCode + '-ROKA');
+    const cell = function(row, col) {
+      return String(row[col - 1] == null ? '' : row[col - 1]).trim();
+    };
     for (let i = 0; i < data.length; i++) {
-      const q = String(data[i][16]).trim().toUpperCase();
-      const r = String(data[i][17]).trim().toUpperCase();
+      const q = cell(data[i], c.huri).toUpperCase();
+      const r = cell(data[i], c.roka).toUpperCase();
       if (q === targetHuri || r === targetRoka) {
-        out.point = String(data[i][0]).trim();
-        if (String(data[i][10]).trim()) out.color = '黒';
-        else if (String(data[i][11]).trim()) out.color = '赤';
-        else if (String(data[i][12]).trim()) out.color = '青';
+        out.point = cell(data[i], c.kuga);
+        if (cell(data[i], c.kuro)) out.color = '黒';
+        else if (cell(data[i], c.aka)) out.color = '赤';
+        else if (cell(data[i], c.ao)) out.color = '青';
         break;
       }
     }
@@ -1138,32 +1194,10 @@ function phase1ColName(colKey) {
  * 区画名と色を補足して記録する (見つからなくても記録は続行)。
  */
 function handlePhase2V2(ss, mode, cfg, parsed, worker, force, autoSwitched) {
-  // 分析検体シートから区画名・色を補足 (Q or R 列でLコード検索)
-  let kentaiPoint = '';
-  let kentaiColor = '';
-  try {
-    const ks = ss.getSheetByName(SHEET_KENTAI);
-    if (ks) {
-      const lastRow = ks.getLastRow();
-      if (lastRow >= 2) {
-        // A〜R (18列)
-        const data = ks.getRange(2, 1, lastRow - 1, 18).getDisplayValues();
-        const targetHuri = (parsed.baseCode + '-HURI');
-        const targetRoka = (parsed.baseCode + '-ROKA');
-        for (let i = 0; i < data.length; i++) {
-          const q = String(data[i][16]).trim().toUpperCase();  // Q=振りコード
-          const r = String(data[i][17]).trim().toUpperCase();  // R=ろかコード
-          if (q === targetHuri || r === targetRoka) {
-            kentaiPoint = String(data[i][0]).trim();
-            if (String(data[i][10]).trim()) kentaiColor = '黒';        // K
-            else if (String(data[i][11]).trim()) kentaiColor = '赤';   // L
-            else if (String(data[i][12]).trim()) kentaiColor = '青';   // M
-            break;
-          }
-        }
-      }
-    }
-  } catch (e) {}
+  // v2.58: 同じ処理が2か所にあったので lookupKentaiByLCode_ に寄せた (見出し式)
+  const kentaiInfo = lookupKentaiByLCode_(ss, parsed.baseCode);
+  const kentaiPoint = kentaiInfo.point;
+  const kentaiColor = kentaiInfo.color;
 
   // 前処理シート (無ければ作成)
   let sheet = ss.getSheetByName(SHEET_ZENSHORI);
@@ -1565,10 +1599,11 @@ function getKentaiData(spreadsheetId) {
     if (lastRow < 1) {
       return { ok: true, name: '分析検体', header: [], rows: [] };
     }
-    // v2.57: A〜R まで返す。Q=振りコード / R=ろかコード が揃いラベル (機能B) に要る。
-    // 2.56 までは A〜P だけだったので、アプリ側からコードが一切見えなかった
-    const KENTAI_COLS = 18;  // A〜R
-    const display = sheet.getRange(1, 1, lastRow, KENTAI_COLS).getDisplayValues();
+    // v2.58: 列数の決め打ちをやめ、シートの全列を返す。
+    // どの列が何かは cols で伝える (アプリ側が位置を数えなくて済む)。
+    // 2.56 までは A〜P だけで、コードのある Q/R が入っていなかった
+    const cols = getKentaiCols_(sheet);
+    const display = sheet.getRange(1, 1, lastRow, cols.lastCol).getDisplayValues();
     if (display.length === 0) {
       return { ok: true, name: '分析検体', header: [], rows: [] };
     }
@@ -1576,7 +1611,11 @@ function getKentaiData(spreadsheetId) {
     const rows = display.slice(1).map(function(r) {
       return r.map(function(v) { return String(v == null ? '' : v); });
     });
-    return { ok: true, name: '分析検体', header: header, rows: rows };
+    // アプリ用は 0 始まりに直して渡す
+    return { ok: true, name: '分析検体', header: header, rows: rows, cols: {
+      kuga: cols.kuga - 1, kuro: cols.kuro - 1, aka: cols.aka - 1, ao: cols.ao - 1,
+      soroi: cols.soroi - 1, huri: cols.huri - 1, roka: cols.roka - 1
+    } };
   } catch (e) {
     return { ok: false, message: 'エラー: ' + e.message };
   }
