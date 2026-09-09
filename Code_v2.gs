@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '2.66-20260909.2322';
+const APP_VERSION = '2.67-20260910.0100';
 
 // ========== シート名 ==========
 const SHEET_HYOSO    = '表層土壌';
@@ -425,8 +425,6 @@ function doPost(e) {
         return respond(listDailyReportDates(p.spreadsheetId));
 
       // ---- v2.55: ラベル印刷 ----
-      case 'markLabelPrinted':
-        return respond(markLabelPrinted(p.spreadsheetId, p.date, p.rows));
       case 'getLabelSiteName':
         return respond(getLabelSiteName(p.spreadsheetId));
       case 'setLabelSiteName':
@@ -921,7 +919,7 @@ function handlePhase1V2(ss, kind, mode, cfg, parsed, worker, force, isDeleted, r
       if (kc.hasUd) dailyBCol = udDisplay(ud);
       else if (isWater) dailyBCol = '地下水';
       else if (cols.DEPTH) dailyBCol = resolved.depth || '';
-      logToDailyReport(ss, modeLabel, point, dailyBCol, worker, now);
+      // v2.67: 日付シートへの書き足しは廃止。日報は元シートから毎回集計する
     } catch (e) {}
   }
 
@@ -1032,7 +1030,7 @@ function handlePhase1Lab_(ss, labSheet, kind, mode, parsed, worker, force, isDel
       if (kc && kc.hasUd) dailyBCol = udDisplay(resolved.ud);
       else if (isWater) dailyBCol = '地下水';
       else dailyBCol = resolved.depth || '';
-      logToDailyReport(ss, mode, point, dailyBCol, worker, now);
+      // v2.67: 日付シートへの書き足しは廃止
     } catch (e) {}
   }
 
@@ -1115,10 +1113,7 @@ function handlePhase2Lab_(ss, labSheet, mode, parsed, worker, force, autoSwitche
   targetCell.setNumberFormat('yyyy/MM/dd HH:mm');
   labSheet.getRange(row, cols[mc.w]).setValue(worker);
 
-  // 日報 (振り/ろかのみ。logToDailyReport 内で対象工程フィルタ)
-  try {
-    logToDailyReport(ss, mode, info.point || parsed.baseCode, info.color, worker, now);
-  } catch (e) {}
+  // v2.67: 日付シートへの書き足しは廃止
 
   const disp = info.point ? (info.point + (info.color ? ' ' + info.color : '')) : parsed.baseCode;
   return {
@@ -1313,7 +1308,7 @@ function handlePhase2Kentai_(ss, info, mode, cfg, parsed, worker, force, autoSwi
   targetCell.setNumberFormat('yyyy/MM/dd HH:mm');
   sheet.getRange(row, c[cfg.workerCol]).setValue(worker);
 
-  try { logToDailyReport(ss, mode, info.point || parsed.baseCode, info.color, worker, now); } catch (e) {}
+  // v2.67: 日付シートへの書き足しは廃止
 
   return {
     ok: true,
@@ -1398,11 +1393,7 @@ function handlePhase2V2(ss, mode, cfg, parsed, worker, force, autoSwitched) {
   targetCell.setNumberFormat('yyyy/MM/dd HH:mm');
   sheet.getRange(foundRow, workerCol).setValue(worker);
 
-  // 日報 (振り/ろかのみ。分析は除外)
-  try {
-    const label = kentaiPoint || parsed.baseCode;
-    logToDailyReport(ss, mode, label, kentaiColor, worker, now);
-  } catch (e) {}
+  // v2.67: 日付シートへの書き足しは廃止
 
   const disp = kentaiPoint ? (kentaiPoint + (kentaiColor ? ' ' + kentaiColor : '')) : parsed.baseCode;
   return {
@@ -1506,63 +1497,84 @@ function getSpreadsheetMeta(spreadsheetId) {
 }
 
 // ========== 日報 ==========
+// v2.67: 日付シートを作るのをやめ、元のシートから毎回集計する。
+//  - シートが増えない
+//  - 元シートを直接直しても日報に反映される
+//  - 対象は 受入 / 風乾 (実データタブ) と 振り / ろか (分析検体タブ) の4工程。
+//    現地確認は現場の記録、分析は別の技術者が別の報告書で出すので載せない。
+//    土壌ガスも従来どおり対象外。
 const DAILY_REPORT_MODES = ['受入', '風乾', '振り', 'ろか'];
-// v2.55: 末尾に「ラベル印刷」を追加 (機能A のラベルを刷った日時を残す)
-const DAILY_REPORT_HEADER = ['地点', '上下/深度/色', '工程', '日時', '担当者', 'ラベル印刷'];
-const DAILY_LABEL_COL = DAILY_REPORT_HEADER.indexOf('ラベル印刷') + 1;   // 1始まりの列番号
+const DAILY_REPORT_HEADER = ['地点', '上下/深度/色', '工程', '日時', '担当者', 'コード', 'ラベル印刷'];
 
-/**
- * v2.55: 2.54 以前に作られた日報シートには「ラベル印刷」列が無い。
- * 見出しが空なら足す (既存の記録は触らない)。
- */
-function ensureDailyLabelCol_(sheet) {
-  try {
-    const cur = String(sheet.getRange(1, DAILY_LABEL_COL).getValue() || '').trim();
-    if (cur === 'ラベル印刷') return;
-    sheet.getRange(1, DAILY_LABEL_COL).setValue('ラベル印刷').setFontWeight('bold');
-    sheet.setColumnWidth(DAILY_LABEL_COL, 120);
-  } catch (e) { /* 失敗しても記録本体は続ける */ }
-}
-
-function logToDailyReport(ss, mode, point, udOrColor, worker, time) {
-  if (DAILY_REPORT_MODES.indexOf(mode) < 0) return;
-  const sheetName = Utilities.formatDate(time || new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
-  let sheet = ss.getSheetByName(sheetName);
-  if (!sheet) {
-    sheet = ss.insertSheet(sheetName);
-    sheet.getRange(1, 1, 1, DAILY_REPORT_HEADER.length).setValues([DAILY_REPORT_HEADER]);
-    sheet.setFrozenRows(1);
-    sheet.getRange(1, 1, 1, DAILY_REPORT_HEADER.length).setFontWeight('bold');
-    sheet.setColumnWidths(1, DAILY_REPORT_HEADER.length, 100);
-  } else {
-    ensureDailyLabelCol_(sheet);
-  }
-  const timeStr = Utilities.formatDate(time || new Date(), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm');
-  sheet.appendRow([point, udOrColor, mode, timeStr, worker, '']);
+/** '2026/09/09 14:51' → '2026-09-09' (読めなければ空) */
+function dateKeyOf_(s) {
+  const m = String(s == null ? '' : s).trim().match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+  if (!m) return '';
+  return m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2);
 }
 
 /**
- * v2.55: 機能A のラベルを刷った行に日時を書く。
- * @param {number[]} rowNumbers 日報シートの行番号 (1始まり・見出し行は2以上)
+ * 元のシートから日報の元ネタを全部集める。
+ * @return {Array} [{ dateKey, time, point, ud, mode, worker, code }]
  */
-function markLabelPrinted(spreadsheetId, dateName, rowNumbers) {
-  try {
-    const ss = openSpreadsheet_(spreadsheetId);
-    const sheet = ss.getSheetByName(String(dateName || '').trim());
-    if (!sheet) return { ok: false, message: 'その日の日報シートがありません: ' + dateName };
-    ensureDailyLabelCol_(sheet);
-    const rows = (rowNumbers || []).map(Number).filter(function(n) {
-      return n >= 2 && n <= sheet.getLastRow();
+function collectDailyRows_(ss) {
+  const out = [];
+  const push = function(timeStr, point, ud, mode, worker, code) {
+    const dk = dateKeyOf_(timeStr);
+    if (!dk || !point) return;
+    out.push({ dateKey: dk, time: String(timeStr).trim(), point: point,
+               ud: ud || '', mode: mode, worker: worker || '', code: code || '' });
+  };
+
+  // --- 実データタブ: 受入 / 風乾 (ガスは対象外) ---
+  ['表層土壌', '配管・ピット・盛り土下', '深度調査'].forEach(function(kind) {
+    const cfg = KIND_CONFIG[kind];
+    const sheet = cfg ? getKindSheet_(ss, kind) : null;
+    if (!sheet) return;
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return;
+    const w = resolveWorkCols_(sheet, cfg);
+    let maxCol = 1;
+    Object.keys(w).forEach(function(k) {
+      if (k !== '__lastCol' && typeof w[k] === 'number' && w[k] > maxCol) maxCol = w[k];
     });
-    if (!rows.length) return { ok: false, message: '対象の行がありません' };
-    const stamp = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm');
-    rows.forEach(function(r) {
-      sheet.getRange(r, DAILY_LABEL_COL).setNumberFormat('@').setValue(stamp);
+    maxCol = Math.min(Math.max(maxCol, w.__lastCol), sheet.getMaxColumns());
+    const v = sheet.getRange(2, 1, lastRow - 1, maxCol).getDisplayValues();
+    v.forEach(function(r) {
+      const get = function(c) {
+        return (c && c >= 1 && c <= r.length) ? String(r[c - 1] == null ? '' : r[c - 1]).trim() : '';
+      };
+      if (get(w.STATUS) === '削除') return;
+      const point = get(w.POINT);
+      const ud = cfg.hasUd ? udDisplay(get(w.UD)) : get(w.DEPTH);
+      const code = get(w.CODE);
+      push(get(w.UKEIRE), point, ud, '受入', get(w.UKEIRE_W), code);
+      push(get(w.FUKAN),  point, ud, '風乾', get(w.FUKAN_W),  code);
     });
-    return { ok: true, count: rows.length, stamp: stamp };
-  } catch (e) {
-    return { ok: false, message: 'エラー: ' + e.message };
-  }
+  });
+
+  // --- 分析検体タブ: 振り / ろか ---
+  (function() {
+    const ks = ss.getSheetByName(SHEET_KENTAI);
+    if (!ks) return;
+    const lastRow = ks.getLastRow();
+    if (lastRow < 2) return;
+    const c = getKentaiCols_(ks);
+    if (!c.HURI_T && !c.ROKA_T) return;   // 記録列がまだ無い現場
+    const v = ks.getRange(2, 1, lastRow - 1, c.lastCol).getDisplayValues();
+    v.forEach(function(r) {
+      const get = function(col) {
+        return (col && col >= 1 && col <= r.length) ? String(r[col - 1] == null ? '' : r[col - 1]).trim() : '';
+      };
+      const point = get(c.kuga);
+      const color = get(c.kuro) ? '黒' : (get(c.aka) ? '赤' : (get(c.ao) ? '青' : ''));
+      const code = get(c.roka) || get(c.huri);
+      if (c.HURI_T) push(get(c.HURI_T), point, color, '振り', get(c.HURI_W), code);
+      if (c.ROKA_T) push(get(c.ROKA_T), point, color, 'ろか', get(c.ROKA_W), code);
+    });
+  })();
+
+  return out;
 }
 
 // ========== ラベル用の現場名 ==========
@@ -1685,36 +1697,39 @@ function getDailyReportData(spreadsheetId, date) {
     const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
     const target = (date && /^\d{4}-\d{2}-\d{2}$/.test(String(date).trim()))
       ? String(date).trim() : today;
-    const dates = listDailyDateNames_(ss);
-    const sheet = ss.getSheetByName(target);
-    if (!sheet) {
+    // v2.67: 日付シートを読むのではなく、元のシートから毎回集計する
+    const all = collectDailyRows_(ss);
+    const dates = distinctDatesDesc_(all);
+    const hit = all.filter(function(x) { return x.dateKey === target; })
+                   .sort(function(a, b) { return a.time < b.time ? -1 : (a.time > b.time ? 1 : 0); });
+    if (!hit.length) {
       const isToday = (target === today);
       return {
         ok: false, name: target, dates: dates, isToday: isToday,
-        message: (isToday ? '本日' : target) + ' の日報はまだありません' +
+        message: (isToday ? '本日' : target) + ' の記録はありません' +
                  (dates.length ? '（記録がある日: ' + dates.slice(0, 5).join(' / ') + (dates.length > 5 ? ' …' : '') + '）' : '')
       };
     }
-    const lastRow = sheet.getLastRow();
-    if (lastRow < 2) {
-      return { ok: false, name: target, dates: dates, message: target + ' の日報は空です' };
-    }
-    ensureDailyLabelCol_(sheet);   // v2.55: 古い日報にも「ラベル印刷」列を用意する
-    const values = sheet.getRange(1, 1, lastRow, DAILY_REPORT_HEADER.length).getDisplayValues();
-    const header = values[0].map(function(v) { return String(v == null ? '' : v); });
-    const rows = values.slice(1).map(function(r) { return r.map(function(v) { return String(v == null ? '' : v); }); });
-    return { ok: true, name: target, header: header, rows: rows, dates: dates, isToday: (target === today) };
+    // ラベル印刷済みかどうかはコードで引く (日付シートの列ではなくなった)
+    const printed = (getLabelPrinted(spreadsheetId).map) || {};
+    const rows = hit.map(function(x) {
+      return [x.point, x.ud, x.mode, x.time, x.worker, x.code,
+              printed[String(x.code).toUpperCase()] || ''];
+    });
+    return { ok: true, name: target, header: DAILY_REPORT_HEADER.slice(),
+             rows: rows, dates: dates, isToday: (target === today) };
   } catch (e) {
     return { ok: false, message: 'エラー: ' + e.message };
   }
 }
 
 /** 日報シート名 (yyyy-MM-dd) を新しい順で返す */
-function listDailyDateNames_(ss) {
+/** v2.67: 集計結果から「記録がある日」を新しい順で取り出す */
+function distinctDatesDesc_(all) {
+  const seen = {};
   const out = [];
-  ss.getSheets().forEach(function(sh) {
-    const nm = sh.getName();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(nm)) out.push(nm);
+  (all || []).forEach(function(x) {
+    if (x.dateKey && !seen[x.dateKey]) { seen[x.dateKey] = true; out.push(x.dateKey); }
   });
   out.sort(function(a, b) { return a < b ? 1 : (a > b ? -1 : 0); });
   return out;
@@ -1724,7 +1739,7 @@ function listDailyDateNames_(ss) {
 function listDailyReportDates(spreadsheetId) {
   try {
     const ss = openSpreadsheet_(spreadsheetId);
-    return { ok: true, dates: listDailyDateNames_(ss) };
+    return { ok: true, dates: distinctDatesDesc_(collectDailyRows_(ss)) };
   } catch (e) {
     return { ok: false, message: 'エラー: ' + e.message };
   }
