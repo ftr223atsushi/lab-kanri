@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '2.56-20260909.1501';
+const APP_VERSION = '2.57-20260909.1511';
 
 // ========== シート名 ==========
 const SHEET_HYOSO    = '表層土壌';
@@ -1565,7 +1565,9 @@ function getKentaiData(spreadsheetId) {
     if (lastRow < 1) {
       return { ok: true, name: '分析検体', header: [], rows: [] };
     }
-    const KENTAI_COLS = 16;  // A〜P
+    // v2.57: A〜R まで返す。Q=振りコード / R=ろかコード が揃いラベル (機能B) に要る。
+    // 2.56 までは A〜P だけだったので、アプリ側からコードが一切見えなかった
+    const KENTAI_COLS = 18;  // A〜R
     const display = sheet.getRange(1, 1, lastRow, KENTAI_COLS).getDisplayValues();
     if (display.length === 0) {
       return { ok: true, name: '分析検体', header: [], rows: [] };
