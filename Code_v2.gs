@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '2.58-20260909.1521';
+const APP_VERSION = '2.60-20260909.1554';
 
 // ========== シート名 ==========
 const SHEET_HYOSO    = '表層土壌';
