@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '2.53-20260909.0300';
+const APP_VERSION = '2.55-20260909.1148';
 
 // ========== シート名 ==========
 const SHEET_HYOSO    = '表層土壌';
@@ -290,9 +290,9 @@ const PROP_PASSWORD_HASH = 'lab2_password_hash';
 const DEFAULT_PASSWORD   = '1111';
 const PASSWORD_SALT      = 'shast-lab2-v2-salt';
 
-// 現場スプレッドシート共有フォルダ (picker v2 の出力先。変わったらここを更新)
-// v2.53: tanaka-app Workspaceの「shast現場」フォルダ（旧=個人側「管理 保存先」1V4zi…）
-const SHARED_FOLDER_ID = '1vy4Ot82TBo8TQMTonx6dvUXPYecXfHLu';
+// v2.54: 共有フォルダの現場一覧は廃止した。
+// 一覧はパスワード無しで呼べたため、Web App URL を知られると全現場のブック名とIDが
+// 見えてしまっていた。現場の指定は QR か URL 手入力だけにする (DriveApp も不要になった)。
 
 // ========== Web App エントリ ==========
 function doGet() {
@@ -334,8 +334,6 @@ function doPost(e) {
       // ---- 現場切替・パスワード ----
       case 'getSpreadsheetMeta':
         return respond(getSpreadsheetMeta(p.spreadsheetId));
-      case 'listSpreadsheetsInSharedFolder':
-        return respond(listSpreadsheetsInSharedFolder());
       case 'verifyPassword':
         return respond(verifyPassword(p.password));
       case 'changePassword':
@@ -354,6 +352,14 @@ function doPost(e) {
       // v2.4: 日報シートが存在する日付の一覧 (カレンダー用)
       case 'listDailyReportDates':
         return respond(listDailyReportDates(p.spreadsheetId));
+
+      // ---- v2.55: ラベル印刷 ----
+      case 'markLabelPrinted':
+        return respond(markLabelPrinted(p.spreadsheetId, p.date, p.rows));
+      case 'getLabelSiteName':
+        return respond(getLabelSiteName(p.spreadsheetId));
+      case 'setLabelSiteName':
+        return respond(setLabelSiteName(p.spreadsheetId, p.name));
 
       // ---- 疎通確認 ----
       case 'ping':
@@ -1314,30 +1320,24 @@ function getSpreadsheetMeta(spreadsheetId) {
   }
 }
 
-function listSpreadsheetsInSharedFolder() {
-  try {
-    const folder = DriveApp.getFolderById(SHARED_FOLDER_ID);
-    const files = folder.getFilesByType(MimeType.GOOGLE_SHEETS);
-    const list = [];
-    while (files.hasNext()) {
-      const f = files.next();
-      list.push({
-        id: f.getId(),
-        name: f.getName(),
-        url: f.getUrl(),
-        lastUpdated: f.getLastUpdated().getTime()
-      });
-    }
-    list.sort(function(a, b) { return b.lastUpdated - a.lastUpdated; });
-    return { ok: true, folderName: folder.getName(), files: list };
-  } catch (e) {
-    return { ok: false, message: '共有フォルダを開けません: ' + e.message };
-  }
-}
-
 // ========== 日報 ==========
 const DAILY_REPORT_MODES = ['受入', '風乾', '振り', 'ろか'];
-const DAILY_REPORT_HEADER = ['地点', '上下/深度/色', '工程', '日時', '担当者'];
+// v2.55: 末尾に「ラベル印刷」を追加 (機能A のラベルを刷った日時を残す)
+const DAILY_REPORT_HEADER = ['地点', '上下/深度/色', '工程', '日時', '担当者', 'ラベル印刷'];
+const DAILY_LABEL_COL = DAILY_REPORT_HEADER.indexOf('ラベル印刷') + 1;   // 1始まりの列番号
+
+/**
+ * v2.55: 2.54 以前に作られた日報シートには「ラベル印刷」列が無い。
+ * 見出しが空なら足す (既存の記録は触らない)。
+ */
+function ensureDailyLabelCol_(sheet) {
+  try {
+    const cur = String(sheet.getRange(1, DAILY_LABEL_COL).getValue() || '').trim();
+    if (cur === 'ラベル印刷') return;
+    sheet.getRange(1, DAILY_LABEL_COL).setValue('ラベル印刷').setFontWeight('bold');
+    sheet.setColumnWidth(DAILY_LABEL_COL, 120);
+  } catch (e) { /* 失敗しても記録本体は続ける */ }
+}
 
 function logToDailyReport(ss, mode, point, udOrColor, worker, time) {
   if (DAILY_REPORT_MODES.indexOf(mode) < 0) return;
@@ -1348,10 +1348,70 @@ function logToDailyReport(ss, mode, point, udOrColor, worker, time) {
     sheet.getRange(1, 1, 1, DAILY_REPORT_HEADER.length).setValues([DAILY_REPORT_HEADER]);
     sheet.setFrozenRows(1);
     sheet.getRange(1, 1, 1, DAILY_REPORT_HEADER.length).setFontWeight('bold');
-    sheet.setColumnWidths(1, 5, 100);
+    sheet.setColumnWidths(1, DAILY_REPORT_HEADER.length, 100);
+  } else {
+    ensureDailyLabelCol_(sheet);
   }
   const timeStr = Utilities.formatDate(time || new Date(), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm');
-  sheet.appendRow([point, udOrColor, mode, timeStr, worker]);
+  sheet.appendRow([point, udOrColor, mode, timeStr, worker, '']);
+}
+
+/**
+ * v2.55: 機能A のラベルを刷った行に日時を書く。
+ * @param {number[]} rowNumbers 日報シートの行番号 (1始まり・見出し行は2以上)
+ */
+function markLabelPrinted(spreadsheetId, dateName, rowNumbers) {
+  try {
+    const ss = openSpreadsheet_(spreadsheetId);
+    const sheet = ss.getSheetByName(String(dateName || '').trim());
+    if (!sheet) return { ok: false, message: 'その日の日報シートがありません: ' + dateName };
+    ensureDailyLabelCol_(sheet);
+    const rows = (rowNumbers || []).map(Number).filter(function(n) {
+      return n >= 2 && n <= sheet.getLastRow();
+    });
+    if (!rows.length) return { ok: false, message: '対象の行がありません' };
+    const stamp = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm');
+    rows.forEach(function(r) {
+      sheet.getRange(r, DAILY_LABEL_COL).setNumberFormat('@').setValue(stamp);
+    });
+    return { ok: true, count: rows.length, stamp: stamp };
+  } catch (e) {
+    return { ok: false, message: 'エラー: ' + e.message };
+  }
+}
+
+// ========== ラベル用の現場名 ==========
+// 件名シートには現場IDしか無く現場名が無い。ブック名は長すぎるので、
+// 端末で入力した短い名前をここ (スクリプトプロパティ) に覚えておく。
+// ブックIDをキーにするので、どの端末から見ても同じ名前が出る。
+const PROP_LABEL_SITE_PREFIX = 'lab2_label_site_';
+
+function getLabelSiteName(spreadsheetId) {
+  try {
+    const id = parseSpreadsheetIdFromInput(spreadsheetId);
+    if (!id) return { ok: false, message: '現場が未設定です' };
+    const saved = PropertiesService.getScriptProperties()
+      .getProperty(PROP_LABEL_SITE_PREFIX + id);
+    if (saved) return { ok: true, name: saved, saved: true };
+    // 未設定ならブック名の先頭を候補として返す (そのまま使わず画面で直せる)
+    let suggest = '';
+    try { suggest = SpreadsheetApp.openById(id).getName().slice(0, 8); } catch (e) {}
+    return { ok: true, name: suggest, saved: false };
+  } catch (e) {
+    return { ok: false, message: 'エラー: ' + e.message };
+  }
+}
+
+function setLabelSiteName(spreadsheetId, name) {
+  try {
+    const id = parseSpreadsheetIdFromInput(spreadsheetId);
+    if (!id) return { ok: false, message: '現場が未設定です' };
+    const v = String(name || '').trim().slice(0, 20);
+    PropertiesService.getScriptProperties().setProperty(PROP_LABEL_SITE_PREFIX + id, v);
+    return { ok: true, name: v };
+  } catch (e) {
+    return { ok: false, message: 'エラー: ' + e.message };
+  }
 }
 
 /**
@@ -1379,6 +1439,7 @@ function getDailyReportData(spreadsheetId, date) {
     if (lastRow < 2) {
       return { ok: false, name: target, dates: dates, message: target + ' の日報は空です' };
     }
+    ensureDailyLabelCol_(sheet);   // v2.55: 古い日報にも「ラベル印刷」列を用意する
     const values = sheet.getRange(1, 1, lastRow, DAILY_REPORT_HEADER.length).getDisplayValues();
     const header = values[0].map(function(v) { return String(v == null ? '' : v); });
     const rows = values.slice(1).map(function(r) { return r.map(function(v) { return String(v == null ? '' : v); }); });
