@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '2.67-20260910.0100';
+const APP_VERSION = '2.68-20260910.1959';
 
 // ========== シート名 ==========
 const SHEET_HYOSO    = '表層土壌';
@@ -1526,8 +1526,10 @@ function collectDailyRows_(ss) {
                ud: ud || '', mode: mode, worker: worker || '', code: code || '' });
   };
 
-  // --- 実データタブ: 受入 / 風乾 (ガスは対象外) ---
-  ['表層土壌', '配管・ピット・盛り土下', '深度調査'].forEach(function(kind) {
+  // --- 実データタブ: 受入 / 風乾 ---
+  // v2.68: 土壌ガスも対象に入れた。ガスは風乾が無いので受入だけが載る
+  //        (上下/深度/色の列は空になる)
+  ['表層土壌', '土壌ガス', '配管・ピット・盛り土下', '深度調査'].forEach(function(kind) {
     const cfg = KIND_CONFIG[kind];
     const sheet = cfg ? getKindSheet_(ss, kind) : null;
     if (!sheet) return;
