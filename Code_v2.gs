@@ -34,7 +34,20 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '2.81-20260912.2116';
+const APP_VERSION = '2.82-20260912.2114';
+
+// ========== アプリの更新案内 ==========
+// ドライブに置いた最新APKの直リンクをここに書く。空なら案内は出ない。
+//
+// 手順 (リリースのたび):
+//   1. 新しいAPKを、ドライブの既存ファイルに「版を管理」で差し替える
+//      → ファイルIDが変わらないので、このURLは書き換え不要
+//   2. Code_v2.gs の APP_VERSION を上げて貼り付け → 新バージョンでデプロイ
+//   3. 端末がアプリを開くと、自分より新しければ下にバナーが出る
+//
+// URLの形式 (drive.google.com のままだとドライブアプリが横取りして落ちる):
+//   https://drive.usercontent.google.com/download?id=【ファイルID】&export=download&confirm=t
+const LATEST_APK_URL = '';
 
 // ========== シート名 ==========
 const SHEET_HYOSO    = '表層土壌';
@@ -437,7 +450,8 @@ function doPost(e) {
 
       // ---- 疎通確認 ----
       case 'ping':
-        return respond({ ok: true, message: 'pong', version: APP_VERSION, time: new Date().toISOString() });
+        return respond({ ok: true, message: 'pong', version: APP_VERSION,
+                         latestUrl: LATEST_APK_URL, time: new Date().toISOString() });
 
       default:
         return respond({ ok: false, message: 'unknown action: ' + action });
