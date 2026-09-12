@@ -47,7 +47,7 @@ const APP_VERSION = '2.82-20260912.2114';
 //
 // URLの形式 (drive.google.com のままだとドライブアプリが横取りして落ちる):
 //   https://drive.usercontent.google.com/download?id=【ファイルID】&export=download&confirm=t
-const LATEST_APK_URL = '';
+const LATEST_APK_URL = 'https://drive.usercontent.google.com/download?id=1nRTD6j2VnaSKf--TaQq7ZBbT80J1K9td&export=download&confirm=t';
 
 // ========== シート名 ==========
 const SHEET_HYOSO    = '表層土壌';

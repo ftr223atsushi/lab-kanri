@@ -41,6 +41,9 @@ https://drive.usercontent.google.com/download?id=【ファイルID】&export=dow
 
 `Code_v2.gs` の `LATEST_APK_URL` にこれを書く。**1回書けば以後変えない。**
 
+**設定済み (2026-09-12)** — ファイルID `1nRTD6j2VnaSKf--TaQq7ZBbT80J1K9td`
+（ドライブ上の名前は `shast-LAB2-latest.apk`）
+
 > `drive.google.com` のままだと、端末のドライブアプリが横取りして
 > ダウンロードにならない。shast のときに引っかかった罠。
 
