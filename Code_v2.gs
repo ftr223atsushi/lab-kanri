@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '2.84-20260914.0031';
+const APP_VERSION = '2.87-20260915.0105';
 
 // ========== アプリの更新案内 ==========
 // ドライブに置いた最新APKの直リンクをここに書く。空なら案内は出ない。
@@ -1542,7 +1542,8 @@ function collectDailyRows_(ss) {
 
   // --- 実データタブ: 受入 / 風乾 ---
   // v2.68: 土壌ガスも対象に入れた。ガスは風乾が無いので受入だけが載る
-  //        (上下/深度/色の列は空になる)
+  // v2.85: ガスは上下も深度も無く2列目が空になるため、後から見て土壌と
+  //        区別がつかないとラボから指摘。2列目に「ガス」と入れる
   ['表層土壌', '土壌ガス', '配管・ピット・盛り土下', '深度調査'].forEach(function(kind) {
     const cfg = KIND_CONFIG[kind];
     const sheet = cfg ? getKindSheet_(ss, kind) : null;
@@ -1562,7 +1563,8 @@ function collectDailyRows_(ss) {
       };
       if (get(w.STATUS) === '削除') return;
       const point = get(w.POINT);
-      const ud = cfg.hasUd ? udDisplay(get(w.UD)) : get(w.DEPTH);
+      const ud = (kind === '土壌ガス') ? 'ガス'
+               : (cfg.hasUd ? udDisplay(get(w.UD)) : get(w.DEPTH));
       const code = get(w.CODE);
       push(get(w.UKEIRE), point, ud, '受入', get(w.UKEIRE_W), code);
       push(get(w.FUKAN),  point, ud, '風乾', get(w.FUKAN_W),  code);
