@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '2.88-20260915.2240';
+const APP_VERSION = '2.89-20260915.2330';
 
 // ========== アプリの更新案内 ==========
 // ドライブに置いた最新APKの直リンクをここに書く。空なら案内は出ない。
@@ -1514,10 +1514,12 @@ function getSpreadsheetMeta(spreadsheetId) {
 // v2.67: 日付シートを作るのをやめ、元のシートから毎回集計する。
 //  - シートが増えない
 //  - 元シートを直接直しても日報に反映される
-//  - 対象は 受入 / 風乾 (実データタブ) と 振り / ろか (分析検体タブ) の4工程。
-//    現地確認は現場の記録、分析は別の技術者が別の報告書で出すので載せない。
-//    土壌ガスも従来どおり対象外。
-const DAILY_REPORT_MODES = ['受入', '風乾', '振り', 'ろか'];
+//  - 対象は 現地確認 / 受入 / 風乾 (実データタブ) と 振り / ろか (分析検体タブ)。
+//    分析は別の技術者が別の報告書で出すので載せない。
+//    v2.68 で土壌ガス、v2.89 で現地確認を載せた (現場の人が日報で件数を見るため)。
+//  - 行ごとの種別 (kinds) も返す。アプリ側で種別タブと担当者の絞り込みをする。
+//    シートに端末IDは無いので「端末ごと」は「いま選んでいる担当者」で代用している
+const DAILY_REPORT_MODES = ['現地確認', '受入', '風乾', '振り', 'ろか'];
 const DAILY_REPORT_HEADER = ['地点', '上下/深度/色', '工程', '日時', '担当者', 'コード', 'ラベル印刷'];
 
 /** '2026/09/09 14:51' → '2026-09-09' (読めなければ空) */
@@ -1568,6 +1570,9 @@ function collectDailyRows_(ss) {
       const ud = (kind === '土壌ガス') ? 'ガス'
                : (cfg.hasUd ? udDisplay(get(w.UD)) : get(w.DEPTH));
       const code = get(w.CODE);
+      // v2.89: 現地確認も載せる。現場の人が日報で件数を見られるように
+      //        (列が無い現場では w.GENCHI_T が undefined なので黙って飛ばす)
+      if (w.GENCHI_T) push(get(w.GENCHI_T), point, ud, '現地確認', get(w.GENCHI_W), code, kind);
       push(get(w.UKEIRE), point, ud, '受入', get(w.UKEIRE_W), code, kind);
       push(get(w.FUKAN),  point, ud, '風乾', get(w.FUKAN_W),  code, kind);
     });
