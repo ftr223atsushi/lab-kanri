@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '2.87-20260915.0105';
+const APP_VERSION = '2.88-20260915.2240';
 
 // ========== アプリの更新案内 ==========
 // ドライブに置いた最新APKの直リンクをここに書く。空なら案内は出ない。
@@ -1533,11 +1533,13 @@ function dateKeyOf_(s) {
  */
 function collectDailyRows_(ss) {
   const out = [];
-  const push = function(timeStr, point, ud, mode, worker, code) {
+  // v2.88: kind (種別) も持たせる。アプリの日報が種別タブで絞り込めるように
+  const push = function(timeStr, point, ud, mode, worker, code, kind) {
     const dk = dateKeyOf_(timeStr);
     if (!dk || !point) return;
     out.push({ dateKey: dk, time: String(timeStr).trim(), point: point,
-               ud: ud || '', mode: mode, worker: worker || '', code: code || '' });
+               ud: ud || '', mode: mode, worker: worker || '', code: code || '',
+               kind: kind || '' });
   };
 
   // --- 実データタブ: 受入 / 風乾 ---
@@ -1566,8 +1568,8 @@ function collectDailyRows_(ss) {
       const ud = (kind === '土壌ガス') ? 'ガス'
                : (cfg.hasUd ? udDisplay(get(w.UD)) : get(w.DEPTH));
       const code = get(w.CODE);
-      push(get(w.UKEIRE), point, ud, '受入', get(w.UKEIRE_W), code);
-      push(get(w.FUKAN),  point, ud, '風乾', get(w.FUKAN_W),  code);
+      push(get(w.UKEIRE), point, ud, '受入', get(w.UKEIRE_W), code, kind);
+      push(get(w.FUKAN),  point, ud, '風乾', get(w.FUKAN_W),  code, kind);
     });
   });
 
@@ -1587,8 +1589,8 @@ function collectDailyRows_(ss) {
       const point = get(c.kuga);
       const color = get(c.kuro) ? '黒' : (get(c.aka) ? '赤' : (get(c.ao) ? '青' : ''));
       const code = get(c.roka) || get(c.huri);
-      if (c.HURI_T) push(get(c.HURI_T), point, color, '振り', get(c.HURI_W), code);
-      if (c.ROKA_T) push(get(c.ROKA_T), point, color, 'ろか', get(c.ROKA_W), code);
+      if (c.HURI_T) push(get(c.HURI_T), point, color, '振り', get(c.HURI_W), code, '分析検体');
+      if (c.ROKA_T) push(get(c.ROKA_T), point, color, 'ろか', get(c.ROKA_W), code, '分析検体');
     });
   })();
 
@@ -1734,8 +1736,11 @@ function getDailyReportData(spreadsheetId, date) {
       return [x.point, x.ud, x.mode, x.time, x.worker, x.code,
               printed[String(x.code).toUpperCase()] || ''];
     });
+    // v2.88: 行ごとの種別を rows と同じ並びで返す (アプリの種別タブ用)。
+    //        表に列は増やさない (印刷の見た目を変えないため)
+    const kinds = hit.map(function(x) { return x.kind || ''; });
     return { ok: true, name: target, header: DAILY_REPORT_HEADER.slice(),
-             rows: rows, dates: dates, isToday: (target === today) };
+             rows: rows, kinds: kinds, dates: dates, isToday: (target === today) };
   } catch (e) {
     return { ok: false, message: 'エラー: ' + e.message };
   }
