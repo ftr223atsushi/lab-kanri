@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '2.94-20260916.2359';
+const APP_VERSION = '2.96-20260917.0130';
 
 // ========== アプリの更新案内 ==========
 // ドライブに置いた最新APKの直リンクをここに書く。空なら案内は出ない。
@@ -1892,7 +1892,8 @@ function readKindWorkRows_(ss, kind, labMap) {
     };
     const point = get(w.POINT);
     if (!point || point === '地点' || point === '地点名') continue;
-    if (get(w.STATUS) === '削除') continue;
+    // v2.95: 削除行も返す (現地確認ビューの横並び表で状態を見せるため)。
+    //        グリッド/検体側は buildAreaMapFromRows で status==='削除' を除外する
     // 受入: 分離構成ならラボ記録から (コードで結合)。現行構成は実データシートの列から
     let ukT = get(w.UKEIRE);
     let ukW = get(w.UKEIRE_W);
@@ -1911,7 +1912,9 @@ function readKindWorkRows_(ss, kind, labMap) {
       // v2.62: 末尾に追加 (既存の 0〜8 は動かさない)。
       //  9=コード ガスのラベル印刷に要る / 10,11=現地確認
       get(w.CODE),
-      get(w.GENCHI_T), get(w.GENCHI_W)
+      get(w.GENCHI_T), get(w.GENCHI_W),
+      // v2.95: 12=風乾日時 13=風乾担当 14=状態 (削除/追加など)
+      get(w.FUKAN), get(w.FUKAN_W), get(w.STATUS)
     ]);
   }
   return { name: sheet.getName(), rows: rows };
