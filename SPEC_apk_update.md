@@ -42,7 +42,7 @@ https://drive.usercontent.google.com/download?id=【ファイルID】&export=dow
 `Code_v2.gs` の `LATEST_APK_URL` にこれを書く。**1回書けば以後変えない。**
 
 **設定済み (2026-09-12)** — ファイルID `1nRTD6j2VnaSKf--TaQq7ZBbT80J1K9td`
-（ドライブ上の名前は `shast-LAB2-latest.apk`）
+（ドライブ上の名前は版入り。2026-09-22 時点 `shast-LAB2-3.02.apk`）
 
 > `drive.google.com` のままだと、端末のドライブアプリが横取りして
 > ダウンロードにならない。shast のときに引っかかった罠。
@@ -62,7 +62,15 @@ https://drive.usercontent.google.com/download?id=【ファイルID】&export=dow
    そのままドライブの画面へドラッグすればよい
    （デスクトップに置いていた時期は毎回どこにあるか分からなくなった）
 2. ドライブのファイルを**差し替え**（版を管理 → 新しい版をアップロード）。
-   **ドライブ上の表示名は `shast-LAB2-latest.apk` のまま変えない**
+   **差し替えたら表示名を `shast-LAB2-3.02.apk` のように版入りに変える**（2026-09-22 ユーザー指示）。
+   名前を変えてもファイルIDは変わらないので、`LATEST_APK_URL` はそのまま。
+   端末に落ちるファイル名も版入りになるので、ダウンロード一覧で見分けられる。
+   UM790 からは rclone で同名上書き→リネームができる（IDが保たれる）:
+   ```
+   rclone copyto --drive-root-folder-id 14FOkg9Upqpk_Frf4uCUyZvE7OGz61m8Q <apk> gdrive:shast-LAB2-<旧版>.apk
+   rclone moveto --drive-root-folder-id 14FOkg9Upqpk_Frf4uCUyZvE7OGz61m8Q gdrive:shast-LAB2-<旧版>.apk gdrive:shast-LAB2-<新版>.apk
+   ```
+   ※ copyto の宛先は**いまドライブにある名前**にする（別名だと新規ファイルになりIDが変わる）
 3. `Code_v2.gs` の `APP_VERSION` を上げて貼り付け → **デプロイを管理 → 新バージョン**
 4. 端末がアプリを開けばバナーが出る
 
@@ -70,9 +78,8 @@ https://drive.usercontent.google.com/download?id=【ファイルID】&export=dow
 バナーが永久に消えなくなる。
 
 版を管理で差し替えると、ドライブに残る「実体」は常に最新の1つだけ。
-だから表示名に版を入れる必要はない。端末に落ちるファイル名も毎回同じなので、
-ダウンロード一覧では `(1)` `(2)` と増える。**どの版が入っているかは
-ファイル名ではなくアプリ画面右上の表記で確かめる。**
+表示名は版入り（`shast-LAB2-3.02.apk`）にしておく。**最終的にどの版が入っているかは
+アプリ画面右上の表記で確かめる。**
 
 APK側の `index.html` のバージョン表記も同じ文字列に揃えること（従来どおり）。
 

@@ -3,6 +3,7 @@
 #                              ./gas-push.sh deploy "v3.01" → 書き込み＋既存デプロイを新バージョンに更新（URL不変）
 # GAS側のファイル名は「コード.js」1本。リポジトリの Code_v2.gs をその名前で送る。
 # 掟: APKをドライブに置いてからGASを上げる（逆だと更新バナーが消えない）。版の文字列はAPKと同じにする。
+# ドライブのAPKは同名上書き(rclone copyto)→版入りにリネーム(rclone moveto)。IDが変わらなければURLはそのまま。
 set -e
 cd "$(dirname "$0")"
 export PATH="$HOME/.local/node/bin:$PATH"
