@@ -21,8 +21,15 @@ v2.82〜3.02 は「⬇ 更新」で外部ブラウザを開くだけだったの
 - Kotlin `MainActivity.downloadAndInstall(url)`: バックグラウンドで `cache/update/` に落とす
   → 先頭が "PK" でなければ「APKではない」で失敗 → パッケージ名が自分と一致するか確認
   → 既存の FileProvider (cache-path) の URI で `ACTION_VIEW` + `application/vnd.android.package-archive`
-- 「不明なアプリのインストール」が未許可なら、先に許可画面 (`ACTION_MANAGE_UNKNOWN_APP_SOURCES`) を開き、
-  戻ってきたらそのままインストール画面へ（初回だけ1タップ増える）
+- 「不明なアプリのインストール」が未許可なら、**ダウンロードより先に**許可画面
+  (`ACTION_MANAGE_UNKNOWN_APP_SOURCES`) を開き、戻ってきたらダウンロード→インストール画面へ
+  （v3.07。初回だけ1タップ増える。URL は SharedPreferences にも控えるので、Fire HD10 で
+  許可画面の裏に回って Activity が作り直されても続く）
+- 落とし済み APK が cache に残っていれば 30 分以内なら落とし直さない。起動時に当たり済み・
+  1日以上前の APK は消す（v3.06）
+- Google 入りの端末では **Play プロテクトの「アプリをスキャン」** が APK ごとに出る（約20秒〜2分）。
+  アプリでは回避できない。Fire HD10 には出ない
+- 検証: Note20 (Android 13) / S24 (Android 15) / Fire HD10 303 (Fire OS 8) で 2026-09-23 に確認済み
 - Manifest に `REQUEST_INSTALL_PACKAGES`
 - JS 側: 進捗は `window.onAndroidUpdateProgress`、失敗は `onAndroidUpdateFailed` → ボタンが
   「失敗・もう一度」になり再試行できる。ブリッジが無い環境では従来どおりブラウザに渡す
