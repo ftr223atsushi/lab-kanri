@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '3.07-20260923.0135';
+const APP_VERSION = '3.16-20260924.2237';
 
 // ========== アプリの更新案内 ==========
 // ドライブに置いた最新APKの直リンクをここに書く。空なら案内は出ない。
@@ -676,6 +676,13 @@ function resolveByCode_(ss, kind, baseCode) {
   return null;
 }
 
+// v3.09: 記録メッセージ・日報に出す深度。配管は現地深度(現場の実測)があればそちらを優先し、
+// 無ければ計画深度(採取深度)。他種別は従来どおり resolved.depth (深度調査は計画深度・地下水は空)
+function dispDepth_(kind, resolved) {
+  if (kind === '配管・ピット・盛り土下' && resolved.extra) return resolved.extra;
+  return resolved.depth || '';
+}
+
 // ========== メイン: スキャン処理 ==========
 /**
  * @param {string} spreadsheetId
@@ -888,11 +895,26 @@ function handlePhase1V2(ss, kind, mode, cfg, parsed, worker, force, isDeleted, r
   const existing = targetCell.getValue();
   if (existing) {
     const prevW = String(sheet.getRange(foundRow, workerCol).getDisplayValue() || '').trim();
-    const ptDisp = point + (kc.hasUd ? '(' + udDisplay(ud) + ')' : (resolved.depth ? '(' + resolved.depth + ')' : ''));
+    const ptDisp = point + (kc.hasUd ? '(' + udDisplay(ud) + ')' : (dispDepth_(kind, resolved) ? '(' + dispDepth_(kind, resolved) + ')' : ''));
+    // v3.10: 記録済みでも、追加入力 (配管の現地深度 / 地下水の水位) が空ならその場で入力できるようにする。
+    // 現地確認ビュー(閲覧専用)には触らず、同じモードで再スキャンしたときだけ拾う
+    let needExtraOnDup = null;
+    if (isWater) {
+      if (WATER_EXTRA.onModes.indexOf(mode) >= 0 && resolved.cols.SUIJI && !resolved.suiji) {
+        needExtraOnDup = { type: WATER_EXTRA.type, label: WATER_EXTRA.label, kind: kind + ':WATER', code: parsed.baseCode, point: point };
+      }
+    } else if (kc.extraCol && kc.extraOnModes && kc.extraOnModes.indexOf(mode) >= 0 && !resolved.extra) {
+      needExtraOnDup = {
+        type: kc.extraType || 'plain', label: kc.extraLabel || '入力',
+        kind: kind, code: parsed.baseCode, point: point,
+        hint: resolved.depth ? ('計画深度: ' + resolved.depth) : ''
+      };
+    }
     return {
       ok: false,
       point: point, kind: kind, mode: mode,
-      message: alreadyRecordedMsg_(modeLabel, existing, ptDisp, prevW)
+      message: alreadyRecordedMsg_(modeLabel, existing, ptDisp, prevW),
+      needExtra: needExtraOnDup
     };
   }
 
@@ -937,7 +959,7 @@ function handlePhase1V2(ss, kind, mode, cfg, parsed, worker, force, isDeleted, r
       let dailyBCol = '';
       if (kc.hasUd) dailyBCol = udDisplay(ud);
       else if (isWater) dailyBCol = '地下水';
-      else if (cols.DEPTH) dailyBCol = resolved.depth || '';
+      else if (cols.DEPTH) dailyBCol = dispDepth_(kind, resolved);
       // v2.67: 日付シートへの書き足しは廃止。日報は元シートから毎回集計する
     } catch (e) {}
   }
@@ -975,7 +997,7 @@ function handlePhase1V2(ss, kind, mode, cfg, parsed, worker, force, isDeleted, r
     extraInfo = { type: kc.extraType || 'plain', label: kc.extraLabel || '入力', kind: kind, code: parsed.baseCode, point: point, current: resolved.extra };
   }
 
-  const udDispMsg = kc.hasUd ? '(' + udDisplay(ud) + ')' : (resolved.depth ? '(' + resolved.depth + ')' : (isWater ? '(地下水)' : ''));
+  const udDispMsg = kc.hasUd ? '(' + udDisplay(ud) + ')' : (dispDepth_(kind, resolved) ? '(' + dispDepth_(kind, resolved) + ')' : (isWater ? '(地下水)' : ''));
   const delTag = isDeleted ? ' [削除地点・赤文字]' : '';
   return {
     ok: true,
@@ -1012,7 +1034,7 @@ function handlePhase1Lab_(ss, labSheet, kind, mode, parsed, worker, force, isDel
     const prevW = String(labSheet.getRange(row, cols[mc.w]).getDisplayValue() || '').trim();
     const kc0 = KIND_CONFIG[kind];
     const ptDisp = point + ((kc0 && kc0.hasUd) ? '(' + udDisplay(resolved.ud) + ')'
-                  : (resolved.depth ? '(' + resolved.depth + ')' : (isWater ? '(地下水)' : '')));
+                  : (dispDepth_(kind, resolved) ? '(' + dispDepth_(kind, resolved) + ')' : (isWater ? '(地下水)' : '')));
     return {
       ok: false,
       point: point, kind: kind, mode: mode,
@@ -1060,7 +1082,7 @@ function handlePhase1Lab_(ss, labSheet, kind, mode, parsed, worker, force, isDel
       let dailyBCol = '';
       if (kc && kc.hasUd) dailyBCol = udDisplay(resolved.ud);
       else if (isWater) dailyBCol = '地下水';
-      else dailyBCol = resolved.depth || '';
+      else dailyBCol = dispDepth_(kind, resolved);
       // v2.67: 日付シートへの書き足しは廃止
     } catch (e) {}
   }
@@ -1086,7 +1108,7 @@ function handlePhase1Lab_(ss, labSheet, kind, mode, parsed, worker, force, isDel
 
   const kc2 = KIND_CONFIG[kind];
   const udDispMsg = (kc2 && kc2.hasUd) ? '(' + udDisplay(resolved.ud) + ')'
-    : (resolved.depth ? '(' + resolved.depth + ')' : (isWater ? '(地下水)' : ''));
+    : (dispDepth_(kind, resolved) ? '(' + dispDepth_(kind, resolved) + ')' : (isWater ? '(地下水)' : ''));
   const delTag = isDeleted ? ' [削除地点・赤文字]' : '';
   return {
     ok: true,
@@ -1242,6 +1264,8 @@ function savePickupExtra(spreadsheetId, kind, baseCode, value, editMode, worker)
     let writeValue = String(value || '').trim();
     if (extraType === 'depth-range') {
       writeValue = formatDepthRange_(writeValue);
+    } else if (isWater) {
+      writeValue = formatWaterLevel_(writeValue);
     }
     if (!writeValue) return { ok: false, message: '入力値が空です' };
 
@@ -1266,6 +1290,16 @@ function appendCorrectionLog_(ss, kind, code, point, label, before, after, worke
     }
     sh.appendRow([new Date(), action, kind, code, point, label, before, after, worker]);
   } catch (e) {}
+}
+
+// v3.15: 水位の単位自動付与 "1.25" → "1.25m" (すでに単位付きならそのまま)
+function formatWaterLevel_(input) {
+  let s = String(input || '').trim();
+  if (!s) return '';
+  if (/m$/i.test(s)) return s;
+  const num = parseFloat(s);
+  if (isNaN(num)) return s;
+  return num.toFixed(2) + 'm';
 }
 
 // v7.4互換: 配管深度の範囲展開 "1.0" → "1.00-1.50m" (+0.5)
@@ -1861,9 +1895,10 @@ function getKentaiData(spreadsheetId) {
  * 正規化 rows (先頭9列は旧版と同一フォーマット。以降は末尾に追加):
  *   [地点, 上下, 深度, 削孔日時, 削孔担当, 採取日時, 採取担当, 受入日時, 受入担当,
  *    9=コード, 10=現地確認日時, 11=現地確認担当, 12=風乾日時, 13=風乾担当, 14=状態,
- *    15=現地深度 (v3.02・配管のみ、他は空)]
+ *    15=現地深度 (v3.02・配管のみ、他は空),
+ *    16=水位 (v3.08・深度調査の地下水行のみ、他は空)]
  * 状態=削除 の行は除外。
- * 注: 地下水行 (WG/WP) は深度調査シートに同居しているのでそのまま含まれる (深度は空 or 水位)。
+ * 注: 地下水行 (WG/WP) は深度調査シートに同居しているのでそのまま含まれる (深度=2列目は空。水位は16列目)。
  */
 function getSaishuAll(spreadsheetId) {
   try {
@@ -1950,16 +1985,10 @@ function readKindWorkRows_(ss, kind, labMap) {
       ukT = lr ? lr.ukT : '';
       ukW = lr ? lr.ukW : '';
     }
-    // v3.01: 地下水行 (WG/WP) は深度が空なので、深度欄に「水位」列の値を見せる (列があるときだけ)
-    let depthDisp = get(w.DEPTH);
-    if (!depthDisp && w.SUIJI && /-(WG|WP)-/i.test(get(w.CODE))) {
-      const sv = get(w.SUIJI);
-      if (sv) depthDisp = '水位 ' + sv;
-    }
     rows.push([
       point,
       get(w.UD),
-      depthDisp,
+      get(w.DEPTH),
       get(w.SAKKO_T), get(w.SAKKO_W),
       get(w.SAISHU),  get(w.SAISHU_W),
       ukT, ukW,
@@ -1970,8 +1999,10 @@ function readKindWorkRows_(ss, kind, labMap) {
       // v2.95: 12=風乾日時 13=風乾担当 14=状態 (削除/追加など)
       get(w.FUKAN), get(w.FUKAN_W), get(w.STATUS),
       // v3.02: 15=現地深度 (配管のみ。受入ラベルは計画深度=採取深度ではなく現地深度で刷る)。
-      //        配管以外の種別は空。深度調査は対象外
-      (cfg.extraCol === 'GENCHI_DEPTH') ? get(w.GENCHI_DEPTH) : ''
+      //        配管以外の種別は空
+      (cfg.extraCol === 'GENCHI_DEPTH') ? get(w.GENCHI_DEPTH) : '',
+      // v3.08: 16=水位 (深度調査の地下水行 (WG/WP) のみ値あり。見出し「水位」が無いブックは空)
+      w.SUIJI ? get(w.SUIJI) : ''
     ]);
   }
   return { name: sheet.getName(), rows: rows };
