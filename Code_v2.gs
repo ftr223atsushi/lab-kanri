@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '3.18-20260928.2247';
+const APP_VERSION = '3.19-20260928.2341';
 
 // ========== アプリの更新案内 ==========
 // ドライブに置いた最新APKの直リンクをここに書く。空なら案内は出ない。
@@ -1187,20 +1187,39 @@ function handlePhase2Lab_(ss, labSheet, mode, parsed, worker, force, autoSwitche
   };
 }
 
-// ========== 記録の取り消し (現地確認・受入のみ・v3.18) ==========
+// ========== 記録の取り消し (現地確認・受入・振り・ろか・分析・v3.18〜3.19) ==========
 /**
  * 間違ったコードを読んで記録してしまった事故の救済。
- * 現地確認(採取モードでGENCHI_T使用時)・受入だけ対応。風乾は対象外 (検体の状態が変わるため)。
+ * 現地確認(採取モードでGENCHI_T使用時)・受入・振り・ろか・分析に対応。
+ * 風乾は対象外 (検体の状態が変わるため)。
  * 日時・担当のセルを空に戻し、前の値を「訂正履歴」シートに残す。
  */
 function undoRecord(spreadsheetId, kind, baseCode, mode, worker) {
   worker = String(worker || '').trim();
   try {
-    const kc = KIND_CONFIG[kind];
-    if (!kc) return { ok: false, message: '不明な種別: ' + kind };
-
     const ss = openSpreadsheet_(spreadsheetId);
     getSiteIdOrThrow_(ss);
+
+    // v3.19: 振り/ろか/分析 (Lコード・分析検体シートに直接書く現行パス)
+    if (mode === '振り' || mode === 'ろか' || mode === '分析') {
+      const info = lookupKentaiByLCode_(ss, baseCode);
+      if (!info.row || !info.cols) return { ok: false, message: 'コード ' + baseCode + ' の行が見つかりません' };
+      const cfg = MODES[mode];
+      const c = info.cols;
+      if (!c[cfg.col] || !c[cfg.workerCol]) return { ok: false, message: mode + ' は取り消しに対応していません' };
+      const targetCell = info.sheet.getRange(info.row, c[cfg.col]);
+      const workerCell = info.sheet.getRange(info.row, c[cfg.workerCol]);
+      const cur = String(targetCell.getDisplayValue() || '').trim();
+      const curW = String(workerCell.getDisplayValue() || '').trim();
+      if (!cur) return { ok: true, message: mode + 'は既に空です' };
+      appendCorrectionLog_(ss, '分析検体', baseCode, info.point, mode, cur + (curW ? ' ' + curW : ''), '', worker, '取り消し');
+      targetCell.setValue('');
+      workerCell.setValue('');
+      return { ok: true, message: mode + 'の記録を消しました (前の値: ' + cur + ' ' + curW + ')' };
+    }
+
+    const kc = KIND_CONFIG[kind];
+    if (!kc) return { ok: false, message: '不明な種別: ' + kind };
 
     const parsed = parseCodeV2(baseCode);
     if (!parsed) return { ok: false, message: 'コード形式が不正です: ' + baseCode };
@@ -1435,7 +1454,11 @@ function handlePhase2Kentai_(ss, info, mode, cfg, parsed, worker, force, autoSwi
     return {
       ok: false,
       point: info.point || parsed.baseCode, mode: mode,
-      message: alreadyRecordedMsg_(mode, existing, ptDisp, prevW)
+      message: alreadyRecordedMsg_(mode, existing, ptDisp, prevW),
+      // v3.19: 振り/ろか/分析も、間違ったコードを読んでしまった事故を同じモードの再スキャンで取り消せるように
+      canUndo: true,
+      code: parsed.baseCode,
+      modeLabel: mode
     };
   }
 
