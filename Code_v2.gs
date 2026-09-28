@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '3.17-20260928.1515';
+const APP_VERSION = '3.18-20260928.2247';
 
 // ========== アプリの更新案内 ==========
 // ドライブに置いた最新APKの直リンクをここに書く。空なら案内は出ない。
@@ -408,6 +408,9 @@ function doPost(e) {
 
       case 'savePickupExtra':
         return respond(savePickupExtra(p.spreadsheetId, p.kind, p.code, p.value, p.editMode, p.worker));
+
+      case 'undoRecord':
+        return respond(undoRecord(p.spreadsheetId, p.kind, p.code, p.mode, p.worker));
 
       // ---- 担当者管理 ----
       case 'getWorkerList':
@@ -910,11 +913,17 @@ function handlePhase1V2(ss, kind, mode, cfg, parsed, worker, force, isDeleted, r
         hint: resolved.depth ? ('計画深度: ' + resolved.depth) : ''
       };
     }
+    // v3.18: 現地確認・受入は、同じモードで再スキャンすると記録の取り消しができるようにする
+    // (風乾は検体の状態が変わるため対象外。間違ったコードを読んで記録してしまった事故の救済)
+    const canUndo = (modeLabel === '現地確認' || mode === '受入');
     return {
       ok: false,
       point: point, kind: kind, mode: mode,
       message: alreadyRecordedMsg_(modeLabel, existing, ptDisp, prevW),
-      needExtra: needExtraOnDup
+      needExtra: needExtraOnDup,
+      canUndo: canUndo,
+      code: canUndo ? parsed.baseCode : undefined,
+      modeLabel: modeLabel
     };
   }
 
@@ -1176,6 +1185,52 @@ function handlePhase2Lab_(ss, labSheet, mode, parsed, worker, force, autoSwitche
     point: info.point || parsed.baseCode, color: info.color, worker: worker,
     time: Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm:ss')
   };
+}
+
+// ========== 記録の取り消し (現地確認・受入のみ・v3.18) ==========
+/**
+ * 間違ったコードを読んで記録してしまった事故の救済。
+ * 現地確認(採取モードでGENCHI_T使用時)・受入だけ対応。風乾は対象外 (検体の状態が変わるため)。
+ * 日時・担当のセルを空に戻し、前の値を「訂正履歴」シートに残す。
+ */
+function undoRecord(spreadsheetId, kind, baseCode, mode, worker) {
+  worker = String(worker || '').trim();
+  try {
+    const kc = KIND_CONFIG[kind];
+    if (!kc) return { ok: false, message: '不明な種別: ' + kind };
+
+    const ss = openSpreadsheet_(spreadsheetId);
+    getSiteIdOrThrow_(ss);
+
+    const parsed = parseCodeV2(baseCode);
+    if (!parsed) return { ok: false, message: 'コード形式が不正です: ' + baseCode };
+
+    const resolved = resolveByCode_(ss, kind, parsed.baseCode);
+    if (!resolved) return { ok: false, message: 'コード ' + parsed.baseCode + ' の行が見つかりません' };
+
+    const cols = resolved.cols;
+    let colKey, workerKey, modeLabel;
+    if (mode === '採取' && cols.GENCHI_T && cols.GENCHI_W) {
+      colKey = 'GENCHI_T'; workerKey = 'GENCHI_W'; modeLabel = '現地確認';
+    } else if (mode === '受入' && cols.UKEIRE && cols.UKEIRE_W) {
+      colKey = 'UKEIRE'; workerKey = 'UKEIRE_W'; modeLabel = '受入';
+    } else {
+      return { ok: false, message: mode + ' は取り消しに対応していません' };
+    }
+    const targetCol = cols[colKey];
+    const workerCol = cols[workerKey];
+
+    const cur = String(resolved.sheet.getRange(resolved.row, targetCol).getDisplayValue() || '').trim();
+    const curW = String(resolved.sheet.getRange(resolved.row, workerCol).getDisplayValue() || '').trim();
+    if (!cur) return { ok: true, message: modeLabel + 'は既に空です' };
+
+    appendCorrectionLog_(ss, kind, parsed.baseCode, resolved.point, modeLabel, cur + (curW ? ' ' + curW : ''), '', worker, '取り消し');
+    resolved.sheet.getRange(resolved.row, targetCol).setValue('');
+    resolved.sheet.getRange(resolved.row, workerCol).setValue('');
+    return { ok: true, message: modeLabel + 'の記録を消しました (前の値: ' + cur + ' ' + curW + ')' };
+  } catch (e) {
+    return { ok: false, message: 'エラー: ' + e.message };
+  }
 }
 
 // ========== 追加入力 (配管の現地深度 / 地下水の水位) ==========
