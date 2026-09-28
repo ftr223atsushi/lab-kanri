@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '3.16-20260924.2237';
+const APP_VERSION = '3.17-20260928.1515';
 
 // ========== アプリの更新案内 ==========
 // ドライブに置いた最新APKの直リンクをここに書く。空なら案内は出ない。
@@ -1649,12 +1649,16 @@ function collectDailyRows_(ss) {
       const point = get(w.POINT);
       const ud = (kind === '土壌ガス') ? 'ガス'
                : (cfg.hasUd ? udDisplay(get(w.UD)) : get(w.DEPTH));
+      // v3.17: 水位があれば「上下/深度/色」欄に付記する (地下水行のみ値がある。
+      //        値の有無だけで判定し、コード種別からは判定しない＝シートの値をそのまま引用する方針)
+      const suiji = w.SUIJI ? get(w.SUIJI) : '';
+      const udWithWater = suiji ? (ud ? ud + ' 水位' + suiji : '水位' + suiji) : ud;
       const code = get(w.CODE);
       // v2.89: 現地確認も載せる。現場の人が日報で件数を見られるように
       //        (列が無い現場では w.GENCHI_T が undefined なので黙って飛ばす)
-      if (w.GENCHI_T) push(get(w.GENCHI_T), point, ud, '現地確認', get(w.GENCHI_W), code, kind);
-      push(get(w.UKEIRE), point, ud, '受入', get(w.UKEIRE_W), code, kind);
-      push(get(w.FUKAN),  point, ud, '風乾', get(w.FUKAN_W),  code, kind);
+      if (w.GENCHI_T) push(get(w.GENCHI_T), point, udWithWater, '現地確認', get(w.GENCHI_W), code, kind);
+      push(get(w.UKEIRE), point, udWithWater, '受入', get(w.UKEIRE_W), code, kind);
+      push(get(w.FUKAN),  point, udWithWater, '風乾', get(w.FUKAN_W),  code, kind);
     });
   });
 
