@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '3.20-20261002.1126';
+const APP_VERSION = '3.21-20261008.1109';
 
 // ========== アプリの更新案内 ==========
 // ドライブに置いた最新APKの直リンクをここに書く。空なら案内は出ない。
@@ -1376,17 +1376,13 @@ function formatWaterLevel_(input) {
   return num.toFixed(2) + 'm';
 }
 
-// v7.4互換: 配管深度の範囲展開 "1.0" → "1.00-1.50m" (+0.5)
+// v3.21: 配管の現地深度。以前(v7.4)は単一数値を自動で+0.5m範囲化していたが、
+// ピンポイントの実測値もそのまま記録したいという要望で廃止。入力値は加工せず、単位(m)だけ自動で付ける
 function formatDepthRange_(input) {
   let s = String(input || '').trim();
   if (!s) return '';
-  s = s.replace(/m$/i, '').trim();
-  if (s.indexOf('-') >= 0 || s.indexOf('〜') >= 0 || s.indexOf('~') >= 0) {
-    return /m$/i.test(input) ? String(input).trim() : String(input).trim() + 'm';
-  }
-  const num = parseFloat(s);
-  if (isNaN(num)) return String(input).trim();
-  return num.toFixed(2) + '-' + (num + 0.5).toFixed(2) + 'm';
+  if (/m$/i.test(s)) return s;
+  return s + 'm';
 }
 
 /**
