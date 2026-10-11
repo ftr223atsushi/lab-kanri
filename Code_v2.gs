@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '3.21-20261008.1109';
+const APP_VERSION = '3.22-20261012.0114';
 
 // ========== アプリの更新案内 ==========
 // ドライブに置いた最新APKの直リンクをここに書く。空なら案内は出ない。
@@ -1871,42 +1871,52 @@ function setLabelSiteName(spreadsheetId, name) {
 
 /**
  * 日報データを返す。
- * @param {string} [date] 'yyyy-MM-dd'。省略時は今日。
- * v2.4: 日付指定で過去の日報も見れるようにした。dates に選択可能な日付一覧も返す。
+ * v3.22: 日付を切り替えるたびに毎回全シートを読み直すと検体数の多い現場で重いため、
+ *        1回で全期間分を返す方式に変更。日付の絞り込みはアプリ側(クライアント)で行う。
+ *        date引数は後方互換のため残すが使わない。
  */
 function getDailyReportData(spreadsheetId, date) {
   try {
     const ss = openSpreadsheet_(spreadsheetId);
     const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
-    const target = (date && /^\d{4}-\d{2}-\d{2}$/.test(String(date).trim()))
-      ? String(date).trim() : today;
-    // v2.67: 日付シートを読むのではなく、元のシートから毎回集計する
     const all = collectDailyRows_(ss);
     const dates = distinctDatesDesc_(all);
-    const hit = all.filter(function(x) { return x.dateKey === target; })
-                   .sort(function(a, b) { return a.time < b.time ? -1 : (a.time > b.time ? 1 : 0); });
-    if (!hit.length) {
-      const isToday = (target === today);
-      return {
-        ok: false, name: target, dates: dates, isToday: isToday,
-        message: (isToday ? '本日' : target) + ' の記録はありません' +
-                 (dates.length ? '（記録がある日: ' + dates.slice(0, 5).join(' / ') + (dates.length > 5 ? ' …' : '') + '）' : '')
-      };
-    }
-    // ラベル印刷済みかどうかはコードで引く (日付シートの列ではなくなった)
     const printed = (getLabelPrinted(spreadsheetId).map) || {};
-    const rows = hit.map(function(x) {
+    const sorted = all.slice().sort(function(a, b) { return a.time < b.time ? -1 : (a.time > b.time ? 1 : 0); });
+    const rows = sorted.map(function(x) {
       return [x.point, x.ud, x.mode, x.time, x.worker, x.code,
               printed[String(x.code).toUpperCase()] || ''];
     });
     // v2.88: 行ごとの種別を rows と同じ並びで返す (アプリの種別タブ用)。
     //        表に列は増やさない (印刷の見た目を変えないため)
-    const kinds = hit.map(function(x) { return x.kind || ''; });
-    return { ok: true, name: target, header: DAILY_REPORT_HEADER.slice(),
-             rows: rows, kinds: kinds, dates: dates, isToday: (target === today) };
+    const kinds = sorted.map(function(x) { return x.kind || ''; });
+    // v3.22: 行ごとの日付キー (アプリ側で日付フィルタするのに使う)
+    const dateKeys = sorted.map(function(x) { return x.dateKey; });
+    const kenmei = getKenmeiMap_(ss);
+    return { ok: true, today: today, header: DAILY_REPORT_HEADER.slice(),
+             rows: rows, kinds: kinds, dateKeys: dateKeys, dates: dates, kenmei: kenmei };
   } catch (e) {
     return { ok: false, message: 'エラー: ' + e.message };
   }
+}
+
+// v3.22: 件名シートの見出し→値のマップ。日報の見出しに出す
+// (件名 / 件名(表層土壌) / 件名(土壌ガス) / 件名(配管・ピット・盛土下) / 件名(深度調査) / 件名(測量) 等)
+function getKenmeiMap_(ss) {
+  const map = {};
+  try {
+    const sheet = ss.getSheetByName(SHEET_KENMEI);
+    if (!sheet) return map;
+    const lastRow = Math.min(sheet.getLastRow(), 20);
+    if (lastRow < 1) return map;
+    const vals = sheet.getRange(1, 1, lastRow, 2).getDisplayValues();
+    vals.forEach(function(r) {
+      const k = String(r[0] || '').trim();
+      const v = String(r[1] || '').trim();
+      if (k) map[k] = v;
+    });
+  } catch (e) {}
+  return map;
 }
 
 /** 日報シート名 (yyyy-MM-dd) を新しい順で返す */
