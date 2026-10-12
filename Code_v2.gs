@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '3.25-20261012.2341';
+const APP_VERSION = '3.26-20261013.0010';
 
 // ========== アプリの更新案内 ==========
 // ドライブに置いた最新APKの直リンクをここに書く。空なら案内は出ない。
@@ -98,11 +98,12 @@ const KIND_CONFIG = {
     hasUd: false,
     hasDepth: true,
     availableModes: ['採取', '受入', '風乾'],
-    // v2: 現地深度は実データシートのK列。受入時に空なら入力ダイアログ (空白のみ書込)
+    // v2: 現地深度は実データシートのK列。空なら入力ダイアログ (空白のみ書込)
+    // v3.26: 受入だけでなく現地確認でも聞く (水位と同じ形。現地で測った深度を現地確認時に入れられるように)
     extraCol: 'GENCHI_DEPTH',
     extraLabel: '現地深度',
     extraType: 'depth-range',
-    extraOnModes: ['受入'],
+    extraOnModes: ['採取', '受入'],
     workCols: {
       STATUS: 1, POINT: 2, DEPTH: 3, CODE: 4,
       SAISHU: 5, SAISHU_W: 6,
@@ -913,6 +914,16 @@ function handlePhase1V2(ss, kind, mode, cfg, parsed, worker, force, isDeleted, r
         hint: resolved.depth ? ('計画深度: ' + resolved.depth) : ''
       };
     }
+    // v3.26: 記録済みでも、追加入力 (配管の現地深度 / 地下水の水位) が既に入っていれば
+    // その場で訂正・削除できるよう返す (モードは問わない。成功時の extraInfo と同じ条件)
+    let extraInfoOnDup = null;
+    if (isWater) {
+      if (resolved.cols.SUIJI && resolved.suiji) {
+        extraInfoOnDup = { type: 'plain', label: '水位', kind: kind + ':WATER', code: parsed.baseCode, point: point, current: resolved.suiji };
+      }
+    } else if (kc.extraCol && resolved.extra) {
+      extraInfoOnDup = { type: kc.extraType || 'plain', label: kc.extraLabel || '入力', kind: kind, code: parsed.baseCode, point: point, current: resolved.extra };
+    }
     // v3.18: 現地確認・受入は、同じモードで再スキャンすると記録の取り消しができるようにする
     // (風乾は検体の状態が変わるため対象外。間違ったコードを読んで記録してしまった事故の救済)
     const canUndo = (modeLabel === '現地確認' || mode === '受入');
@@ -921,6 +932,7 @@ function handlePhase1V2(ss, kind, mode, cfg, parsed, worker, force, isDeleted, r
       point: point, kind: kind, mode: mode,
       message: alreadyRecordedMsg_(modeLabel, existing, ptDisp, prevW),
       needExtra: needExtraOnDup,
+      extraInfo: extraInfoOnDup,
       canUndo: canUndo,
       code: canUndo ? parsed.baseCode : undefined,
       modeLabel: modeLabel
@@ -974,7 +986,7 @@ function handlePhase1V2(ss, kind, mode, cfg, parsed, worker, force, isDeleted, r
   }
 
   // 追加入力ダイアログ判定
-  //  - 配管: 受入時、現地深度(K列)が空なら入力促し (空白のみ書込・既存値は保護)
+  //  - 配管: 現地確認/受入時、現地深度(K列)が空なら入力促し (空白のみ書込・既存値は保護)
   //  - 地下水 (WG/WP): 採取/受入時、深度列(C)が空なら水位入力促し
   let needExtra = null;
   if (isWater) {
