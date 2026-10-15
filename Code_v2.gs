@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '3.27-20261015.0847';
+const APP_VERSION = '3.28-20261016.0553';
 
 // ========== アプリの更新案内 ==========
 // ドライブに置いた最新APKの直リンクをここに書く。空なら案内は出ない。
@@ -56,6 +56,13 @@ const SHEET_HAIKAN_NAMES = ['配管・ピット・盛り土下', '配管・ピ�
 const SHEET_GAS      = '土壌ガス';
 const SHEET_FUKADO   = '深度調査';
 const SHEET_KENTAI   = '分析検体';
+// v3.28: picker v3.50以降、深度調査の分析サンプルは「分析検体」ではなく下の2枚に分かれて出る。
+// 第2種3種=黒赤青の前処理あり(揃いラベル対象・地下水WP行も同居)、第1種=VOC(前処理なし・ガスと同じ扱い)
+const SHEET_KENTAI_D23 = '分析検体・深度第2種3種';
+const SHEET_KENTAI_D1  = '分析検体・深度第1種';
+// 「分析検体」シートが無い現場 (深度調査だけの現場) で、アプリに返す見出しの雛形 (picker の分析検体と同じ並び)
+const KENTAI_STD_HEADER = ['区画', '1', '2', '3', '4', '5', '6', '7', '8', '9', '黒', '赤', '青', '種別',
+  '検体揃い状況', '印刷日', 'ろかコード', '振り日時', '振り担当', 'ろか日時', 'ろか担当', '分析日時', '分析担当'];
 const SHEET_KENMEI   = '件名';
 const SHEET_ZENSHORI = '前処理';   // v2暫定: 振り/ろか/分析(土壌)の記録先 (無ければ自動作成)
 
@@ -244,15 +251,23 @@ function findOrAppendLabRow_(sheet, cols, baseCode, point, kindLabel) {
  */
 function getKentaiCols_(sheet) {
   const lastCol = Math.max(sheet.getLastColumn(), 1);
-  const header = sheet.getRange(1, 1, 1, lastCol).getDisplayValues()[0]
-    .map(function(v) { return String(v == null ? '' : v).trim(); });
+  const header = sheet.getRange(1, 1, 1, lastCol).getDisplayValues()[0];
+  return kentaiColsCore_(header, sheet);
+}
+
+// v3.28: 見出しだけから列を決める本体。sheet を渡すと見出しの無い振り/ろかコード列を実データから探す。
+// 「分析検体・深度第2種3種」は区画の代わりに 地点+深度 の2列なので、地点も区画として拾い、深度列も返す
+function kentaiColsCore_(headerRow, sheet) {
+  const header = (headerRow || []).map(function(v) { return String(v == null ? '' : v).trim(); });
+  const lastCol = Math.max(header.length, 1);
   const find = function(pred) {
     for (let i = 0; i < header.length; i++) { if (pred(header[i])) return i + 1; }
     return 0;
   };
   const cols = {
     lastCol: lastCol,
-    kuga:  find(function(h) { return h === '区画'; }),
+    kuga:  find(function(h) { return h === '区画' || h === '地点'; }),
+    depth: find(function(h) { return h === '深度'; }),
     kuro:  find(function(h) { return h === '黒'; }),
     aka:   find(function(h) { return h === '赤'; }),
     ao:    find(function(h) { return h === '青'; }),
@@ -268,7 +283,7 @@ function getKentaiCols_(sheet) {
     BUNSEKI_W: find(function(h) { return h === '分析担当'; })
   };
   // 見出しが空でも、末尾 -HURI / -ROKA の列を実データから探す
-  if (!cols.huri || !cols.roka) {
+  if (sheet && (!cols.huri || !cols.roka)) {
     const n = Math.min(Math.max(sheet.getLastRow() - 1, 0), 50);
     if (n > 0) {
       const data = sheet.getRange(2, 1, n, lastCol).getDisplayValues();
@@ -298,33 +313,39 @@ function getKentaiCols_(sheet) {
 function lookupKentaiByLCode_(ss, baseCode) {
   // v2.62: 行番号と列位置も返す (振り/ろか/分析をこのシートに書くため)
   const out = { point: '', color: '', row: 0, sheet: null, cols: null };
-  try {
-    const ks = ss.getSheetByName(SHEET_KENTAI);
-    if (!ks) return out;
-    const lastRow = ks.getLastRow();
-    if (lastRow < 2) return out;
-    const c = getKentaiCols_(ks);
-    out.sheet = ks;
-    out.cols = c;
-    const data = ks.getRange(2, 1, lastRow - 1, c.lastCol).getDisplayValues();
-    const targetHuri = (baseCode + '-HURI');
-    const targetRoka = (baseCode + '-ROKA');
-    const cell = function(row, col) {
-      return String(row[col - 1] == null ? '' : row[col - 1]).trim();
-    };
-    for (let i = 0; i < data.length; i++) {
-      const q = cell(data[i], c.huri).toUpperCase();
-      const r = cell(data[i], c.roka).toUpperCase();
-      if (q === targetHuri || r === targetRoka) {
-        out.row = i + 2;
-        out.point = cell(data[i], c.kuga);
-        if (cell(data[i], c.kuro)) out.color = '黒';
-        else if (cell(data[i], c.aka)) out.color = '赤';
-        else if (cell(data[i], c.ao)) out.color = '青';
-        break;
+  // v3.28: 分析検体 で見つからなければ 分析検体・深度第2種3種 も探す (深度の土壌行はLコード、
+  //        地下水WP行は WPコード-roka。どちらもろかコード列で一致させる)
+  const sheetNames = [SHEET_KENTAI, SHEET_KENTAI_D23];
+  const targetHuri = (String(baseCode).toUpperCase() + '-HURI');
+  const targetRoka = (String(baseCode).toUpperCase() + '-ROKA');
+  const cell = function(row, col) {
+    return (col && col >= 1) ? String(row[col - 1] == null ? '' : row[col - 1]).trim() : '';
+  };
+  for (let s = 0; s < sheetNames.length; s++) {
+    try {
+      const ks = ss.getSheetByName(sheetNames[s]);
+      if (!ks) continue;
+      const lastRow = ks.getLastRow();
+      if (lastRow < 2) continue;
+      const c = getKentaiCols_(ks);
+      const data = ks.getRange(2, 1, lastRow - 1, c.lastCol).getDisplayValues();
+      for (let i = 0; i < data.length; i++) {
+        const q = cell(data[i], c.huri).toUpperCase();
+        const r = cell(data[i], c.roka).toUpperCase();
+        if (q === targetHuri || r === targetRoka) {
+          out.sheet = ks;
+          out.cols = c;
+          out.row = i + 2;
+          const dep = c.depth ? cell(data[i], c.depth) : '';
+          out.point = cell(data[i], c.kuga) + (dep ? ' ' + dep : '');
+          if (cell(data[i], c.kuro)) out.color = '黒';
+          else if (cell(data[i], c.aka)) out.color = '赤';
+          else if (cell(data[i], c.ao)) out.color = '青';
+          return out;
+        }
       }
-    }
-  } catch (e) {}
+    } catch (e) {}
+  }
   return out;
 }
 
@@ -751,7 +772,9 @@ function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker, conf
     // v2.62: 振りコードを廃止し、ろかコード1本をラボ内で使い回す方針になった。
     // そのため接尾辞で工程を決めるのをやめ、他の工程と同じくモードボタンで決める。
     // (以前は -roka を読むと必ず「ろか」に切り替わっていたので、振りが記録できなくなる)
-    if (parsed.codeType === 'L' || (parsed.format === 'legacy' && parsed.suffix)) {
+    // v3.28: 地下水WPの検体は「WPコード-roka」(分析検体・深度第2種3種) なので、L以外でも
+    //        -roka / -huri が付いていればこちらへ回す
+    if (parsed.codeType === 'L' || parsed.suffix) {
       const PHASE2_MODES = ['振り', 'ろか', '分析'];
       if (PHASE2_MODES.indexOf(effectiveMode) < 0) {
         return {
@@ -768,6 +791,10 @@ function handleScan(spreadsheetId, kind, mode, code, force, overrideWorker, conf
       // handlePhase2V2 が「分析検体に記録列があればそちら、無ければ前処理シート」を判断する。
       // ラボ記録シートを使う旧案は取り下げたので、分析検体に列がある時はそちらを優先する
       const kInfo = lookupKentaiByLCode_(ss, parsed.baseCode);
+      // v3.28: Lコード以外 (WP-roka 等) は前処理シートに落とさない。見つからなければその場で止める
+      if (parsed.codeType !== 'L' && parsed.format === 'v2' && !kInfo.row) {
+        return { ok: false, message: 'コード ' + code + ' が分析検体シートに見つかりません' };
+      }
       const kentaiReady = !!(kInfo.row && kInfo.cols &&
                              kInfo.cols[cfg2.col] && kInfo.cols[cfg2.workerCol]);
       if (labSheet && !kentaiReady) {
@@ -1749,8 +1776,9 @@ function collectDailyRows_(ss) {
   });
 
   // --- 分析検体タブ: 振り / ろか ---
-  (function() {
-    const ks = ss.getSheetByName(SHEET_KENTAI);
+  // v3.28: 分析検体・深度第2種3種 (深度の土壌行・地下水WP行) も同じ形なので一緒に拾う
+  [SHEET_KENTAI, SHEET_KENTAI_D23].forEach(function(sheetName) {
+    const ks = ss.getSheetByName(sheetName);
     if (!ks) return;
     const lastRow = ks.getLastRow();
     if (lastRow < 2) return;
@@ -1761,13 +1789,14 @@ function collectDailyRows_(ss) {
       const get = function(col) {
         return (col && col >= 1 && col <= r.length) ? String(r[col - 1] == null ? '' : r[col - 1]).trim() : '';
       };
-      const point = get(c.kuga);
+      const dep = c.depth ? get(c.depth) : '';
+      const point = get(c.kuga) + (dep ? ' ' + dep : '');
       const color = get(c.kuro) ? '黒' : (get(c.aka) ? '赤' : (get(c.ao) ? '青' : ''));
       const code = get(c.roka) || get(c.huri);
       if (c.HURI_T) push(get(c.HURI_T), point, color, '振り', get(c.HURI_W), code, '分析検体');
       if (c.ROKA_T) push(get(c.ROKA_T), point, color, 'ろか', get(c.ROKA_W), code, '分析検体');
     });
-  })();
+  });
 
   return out;
 }
@@ -1955,33 +1984,89 @@ function listDailyReportDates(spreadsheetId) {
 
 // ========== ビュー用データ (APK 互換フォーマット) ==========
 /**
- * 分析検体シート A〜P列 (v2でも旧と同じ構造)。
+ * 分析検体シート (列は見出しで決める)。
+ * v3.28: 分析検体・深度第2種3種 の行も「分析検体と同じ列並び」に直して後ろに足す
+ *        (区画=「地点 深度」・種別=「深度2,3種」)。行ごとの hints (=深度調査) と codes (D/WPコード)
+ *        を rows と同じ並びで返す。分析検体・深度第1種 (VOC) は voc に別で返す (揃いラベルは無い)。
+ *        「分析検体」が無い現場 (深度調査だけ) は見出しを雛形で作る。
  */
 function getKentaiData(spreadsheetId) {
+  const str = function(v) { return String(v == null ? '' : v); };
+  const trim = function(v) { return str(v).trim(); };
   try {
     const ss = openSpreadsheet_(spreadsheetId);
     const sheet = ss.getSheetByName(SHEET_KENTAI);
-    if (!sheet) {
+    const d23 = ss.getSheetByName(SHEET_KENTAI_D23);
+    const d1 = ss.getSheetByName(SHEET_KENTAI_D1);
+    if (!sheet && !d23 && !d1) {
       return { ok: false, message: '分析検体シートが見つかりません' };
     }
-    const lastRow = sheet.getLastRow();
-    if (lastRow < 1) {
-      return { ok: true, name: '分析検体', header: [], rows: [] };
+    // v2.58: 列数の決め打ちをやめ、シートの全列を返す。どの列が何かは cols で伝える
+    let header, rows = [], cols;
+    if (sheet && sheet.getLastRow() >= 1) {
+      cols = getKentaiCols_(sheet);
+      const display = sheet.getRange(1, 1, sheet.getLastRow(), cols.lastCol).getDisplayValues();
+      header = display[0].map(str);
+      rows = display.slice(1).map(function(r) { return r.map(str); });
+    } else {
+      header = KENTAI_STD_HEADER.slice();
+      cols = kentaiColsCore_(header, null);
     }
-    // v2.58: 列数の決め打ちをやめ、シートの全列を返す。
-    // どの列が何かは cols で伝える (アプリ側が位置を数えなくて済む)。
-    // 2.56 までは A〜P だけで、コードのある Q/R が入っていなかった
-    const cols = getKentaiCols_(sheet);
-    const display = sheet.getRange(1, 1, lastRow, cols.lastCol).getDisplayValues();
-    if (display.length === 0) {
-      return { ok: true, name: '分析検体', header: [], rows: [] };
+    const hints = rows.map(function() { return ''; });
+    const codes = rows.map(function() { return ''; });
+    const colorOf = function(r) {
+      return trim(r[cols.kuro - 1]) ? '黒' : (trim(r[cols.aka - 1]) ? '赤' : (trim(r[cols.ao - 1]) ? '青' : ''));
+    };
+
+    if (d23 && d23.getLastRow() >= 2) {
+      const dv = d23.getRange(1, 1, d23.getLastRow(), Math.max(d23.getLastColumn(), 1)).getDisplayValues();
+      const dh = dv[0].map(trim);
+      const iPt = dh.indexOf('地点'), iDep = dh.indexOf('深度'), iCode = dh.indexOf('コード');
+      // 2026-10-11以前のpickerは深度の検体も「分析検体」に出していた (ゲンキー等)。
+      // ラボはそちらのコードで既に刷って作業しているので、同じ 地点+深度+色 の行は足さない (二重ラベル防止)
+      const exist = {};
+      rows.forEach(function(r) { exist[trim(r[cols.kuga - 1]) + '|' + colorOf(r)] = true; });
+      // pickerの出力で同じ行(ろかコードまで同一)が2回入ることがある (2026-10-16 墨田区で98件)。
+      // ろかスキャンは最初の行に書くので、2回目以降は出さない (二重ラベル防止)
+      const iRoka = cols.roka - 1;
+      const seenRoka = {};
+      rows.forEach(function(r) { const k = trim(r[iRoka]).toUpperCase(); if (k) seenRoka[k] = true; });
+      dv.slice(1).forEach(function(r) {
+        const pt = iPt >= 0 ? trim(r[iPt]) : '';
+        if (!pt) return;
+        const dep = iDep >= 0 ? trim(r[iDep]) : '';
+        const kuga = dep ? pt + ' ' + dep : pt;
+        const out = header.map(function(h) {
+          h = trim(h);
+          if (h === '区画') return kuga;
+          if (h === '種別') return '深度2,3種';
+          const j = dh.indexOf(h);
+          return j >= 0 ? str(r[j]) : '';
+        });
+        if (exist[kuga + '|' + colorOf(out)]) return;
+        const rk = trim(out[iRoka]).toUpperCase();
+        if (rk && seenRoka[rk]) return;
+        if (rk) seenRoka[rk] = true;
+        rows.push(out);
+        hints.push('深度調査');
+        codes.push(iCode >= 0 ? trim(r[iCode]) : '');
+      });
     }
-    const header = display[0].map(function(v) { return String(v == null ? '' : v); });
-    const rows = display.slice(1).map(function(r) {
-      return r.map(function(v) { return String(v == null ? '' : v); });
-    });
+
+    const voc = [];
+    if (d1 && d1.getLastRow() >= 2) {
+      const vv = d1.getRange(1, 1, d1.getLastRow(), Math.max(d1.getLastColumn(), 1)).getDisplayValues();
+      const vh = vv[0].map(trim);
+      const ix = function(n) { return vh.indexOf(n); };
+      vv.slice(1).forEach(function(r) {
+        const g = function(n) { const j = ix(n); return j >= 0 ? trim(r[j]) : ''; };
+        if (!g('地点')) return;
+        voc.push({ point: g('地点'), depth: g('深度'), code: g('コード'), soroi: g('検体揃い状況') });
+      });
+    }
+
     // アプリ用は 0 始まりに直して渡す
-    return { ok: true, name: '分析検体', header: header, rows: rows, cols: {
+    return { ok: true, name: '分析検体', header: header, rows: rows, hints: hints, codes: codes, voc: voc, cols: {
       kuga: cols.kuga - 1, kuro: cols.kuro - 1, aka: cols.aka - 1, ao: cols.ao - 1,
       soroi: cols.soroi - 1, huri: cols.huri - 1, roka: cols.roka - 1
     } };
