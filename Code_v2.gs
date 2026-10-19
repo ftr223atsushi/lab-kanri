@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '3.28-20261016.0553';
+const APP_VERSION = '3.29-20261019.1701';
 
 // ========== アプリの更新案内 ==========
 // ドライブに置いた最新APKの直リンクをここに書く。空なら案内は出ない。
@@ -1047,12 +1047,15 @@ function handlePhase1V2(ss, kind, mode, cfg, parsed, worker, force, isDeleted, r
 
   const udDispMsg = kc.hasUd ? '(' + udDisplay(ud) + ')' : (dispDepth_(kind, resolved) ? '(' + dispDepth_(kind, resolved) + ')' : (isWater ? '(地下水)' : ''));
   const delTag = isDeleted ? ' [削除地点・赤文字]' : '';
+  // v3.29: 深度・配管・地下水は深度も返す。アプリの履歴と読み上げに出さないと、同じ地点の
+  //        1m〜10m・地下水の区別がつかなかった (2026-10-19 墨田区で報告)
+  const depthOut = kc.hasUd ? '' : (dispDepth_(kind, resolved) || (isWater ? '地下水' : ''));
   return {
     ok: true,
     message: modeLabel + ' 記録完了: ' + point + udDispMsg + ' 担当:' + worker + delTag,
     kind: kind,
     mode: mode, modeLabel: modeLabel, autoMode: null,
-    point: point, ud: ud, worker: worker,
+    point: point, ud: ud, depth: depthOut, worker: worker,
     isDeleted: isDeleted,
     needExtra: needExtra,
     extraInfo: extraInfo,
@@ -1164,6 +1167,7 @@ function handlePhase1Lab_(ss, labSheet, kind, mode, parsed, worker, force, isDel
     kind: kind,
     mode: mode, autoMode: null,
     point: point, ud: resolved.ud, worker: worker,
+    depth: (kc2 && kc2.hasUd) ? '' : (dispDepth_(kind, resolved) || (isWater ? '地下水' : '')),   // v3.29
     isDeleted: isDeleted,
     needExtra: needExtra,
     time: Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm:ss')
