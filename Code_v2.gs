@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '3.30-20261023.2130';
+const APP_VERSION = '3.31-20261026.0917';
 
 // ========== アプリの更新案内 ==========
 // ドライブに置いた最新APKの直リンクをここに書く。空なら案内は出ない。
@@ -1818,9 +1818,14 @@ function getLabelSiteName(spreadsheetId) {
     const saved = PropertiesService.getScriptProperties()
       .getProperty(PROP_LABEL_SITE_PREFIX + id);
     if (saved) return { ok: true, name: saved, saved: true };
-    // 未設定ならブック名の先頭を候補として返す (そのまま使わず画面で直せる)
+    // 未設定なら候補を返す (画面で直せる)。v3.31: ブック名ではなく件名シートの
+    // 「ラベル略件名」(pickerが件名の先頭8文字を入れる) → 無ければ「件名」の先頭6文字 (ユーザー指定)
     let suggest = '';
-    try { suggest = SpreadsheetApp.openById(id).getName().slice(0, 8); } catch (e) {}
+    try {
+      const ss = SpreadsheetApp.openById(id);
+      const k = getKenmeiMap_(ss);
+      suggest = String(k['ラベル略件名'] || k['件名'] || ss.getName() || '').trim().slice(0, 6);
+    } catch (e) {}
     return { ok: true, name: suggest, saved: false };
   } catch (e) {
     return { ok: false, message: 'エラー: ' + e.message };
