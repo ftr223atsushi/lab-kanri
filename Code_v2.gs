@@ -409,6 +409,27 @@ function doGet() {
     .setMimeType(ContentService.MimeType.TEXT);
 }
 
+// 2026-10-29: 書き込みは1台ずつ順番に通す (LockService)。
+// 複数台で同じシートに同時に書くと、①同じコードを2台がほぼ同時に読むと両方が「まだ空」と見て二重に書く
+// ②ラベル印刷の控えは末尾に行を足すので、同時だと片方が上書きされる、が起きうる。
+// 待つのは前の書き込みが終わるまで (普通は1秒未満)。読むだけの処理 (表示・日報) は待たせない。
+const WRITE_ACTIONS_ = {
+  handleScan: true, savePickupExtra: true, undoRecord: true,
+  markCodeLabelPrinted: true, setLabelSiteName: true, addWorker: true
+};
+function withWriteLock_(fn) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    return { ok: false, message: 'サーバーが混み合っています。少し待ってからもう一度読んでください（記録はされていません）' };
+  }
+  try {
+    return fn();
+  } finally {
+    try { SpreadsheetApp.flush(); } catch (e) {}   // 次の端末が書いた結果を読めるよう、離す前に書き切る
+    lock.releaseLock();
+  }
+}
+
 function doPost(e) {
   const respond = function(obj) {
     return ContentService
@@ -420,7 +441,17 @@ function doPost(e) {
     const raw = (e && e.postData && e.postData.contents) ? e.postData.contents : '{}';
     const p = JSON.parse(raw);
     const action = p.action || '';
+    if (WRITE_ACTIONS_[action]) {
+      return withWriteLock_(function() { return doPostAction_(action, p, respond); });
+    }
+    return doPostAction_(action, p, respond);
+  } catch (err) {
+    return respond({ ok: false, message: 'doPost error: ' + (err && err.message ? err.message : String(err)) });
+  }
+}
 
+function doPostAction_(action, p, respond) {
+  try {
     switch (action) {
       case 'handleScan':
         return respond(handleScan(
