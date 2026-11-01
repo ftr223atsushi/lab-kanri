@@ -549,6 +549,7 @@ test('same_device_rereg_no_new_row', () => {
   const r = touch(h, mkEntry(5), 'dev1');
   ok(r.ok === true && r.used === 1, '同じ端末は通る used は増えない(' + JSON.stringify(r) + ')');
   ok(useRows(h).length === 2, '行は増えない');
+  ok(useRows(h)[1][6] === 2, '利用回数は +1');
   // 別のキーの同じ端末は別の行
   const r2 = touch(h, mkEntry(5), 'dev1', { key: 'LAB-ZZZZ-2222' });
   ok(r2.ok === true && useRows(h).length === 3, '別キーの同じ端末は別の1行');
@@ -686,6 +687,80 @@ test('lock_released_after_touch', () => {
   touch(h, mkEntry(5), 'dev1');
   ok(h.cache.get('lk_ledger') === undefined, '札は消えている');
 });
+
+// ---- Task 4 修正ラウンド ----
+const fmtAt = (h, r, c) => h.books[LEDGER_ID].sheets.find(s => s.name === 'lab-kanri利用').getRange(r, c).getNumberFormat();
+test('text_columns_forced_text_format_new_row', () => {
+  const h = useBook([]);
+  touch(h, mkEntry(5), '0012345', { name: '1e5', ver: '3.30' });
+  // A キー B 会社名 C 端末ID D 端末名 E 初回 F 最終 H 版 I 最終判定 はすべて '@'、G 利用回数は数値のまま
+  for (const c of [1, 2, 3, 4, 5, 6, 8, 9]) ok(fmtAt(h, 2, c) === '@', USE_HDR[c - 1] + ' は書式@(' + fmtAt(h, 2, c) + ')');
+  ok(fmtAt(h, 2, 7) !== '@', '利用回数は数値のまま(書式@にしない)');
+  ok(useRows(h)[1][2] === '0012345' && useRows(h)[1][7] === '3.30', '値は文字のまま');
+});
+test('text_columns_forced_text_format_update', () => {
+  const h = useBook([[TK, 'A社', '0012345', 'SM', '2026/10/01 09:00', '2026/10/01 09:00', 1, '3.29', '有効', '']]);
+  touch(h, mkEntry(5), '0012345', { ver: '3.30' });
+  for (const c of [6, 8, 9]) ok(fmtAt(h, 2, c) === '@', USE_HDR[c - 1] + ' は書式@(' + fmtAt(h, 2, c) + ')');
+  ok(fmtAt(h, 2, 7) !== '@', '利用回数は数値のまま');
+  ok(useRows(h)[1][7] === '3.30', '版は 3.30 のまま');
+});
+test('unowned_columns_never_written', () => {
+  const hdr = USE_HDR.concat(['メモ']);
+  const books = {}; books[LEDGER_ID] = { 'lab-kanri利用': [hdr, [TK, 'A社', 'dev1', 'SM', 'a', 'b', 1, 'v', '有効', 'AGM', '=A2&"x"']] };
+  const h = harness.build({ books: books });
+  const sh = h.books[LEDGER_ID].sheets[0];
+  sh.log.length = 0;
+  touch(h, mkEntry(5), 'dev1');   // 更新
+  touch(h, mkEntry(5), 'dev2');   // 新しい行
+  const written = sh.log.map(x => x.split(',').map(Number));
+  ok(written.length > 0, '何か書いている');
+  ok(written.every(([r, c]) => c <= 9), '呼び名(J)・メモ(K)の列には1度も書かない(' + sh.log.join(' ') + ')');
+  ok(sh.rows[1][9] === 'AGM' && sh.rows[1][10] === '=A2&"x"', '既存行の呼び名・メモが残る');
+  ok(sh.rows.length === 3 && sh.rows[2][2] === 'dev2', '新しい行は足される');
+});
+test('inputs_normalized_key_and_device', () => {
+  const h = useBook([[TK, 'A社', 'dev1', 'SM', 'a', 'b', 1, 'v', '有効', '']]);
+  const r = h.ctx.license_touchDevice_('lab-abcd-efgh', mkEntry(5), '  dev1 ', 'SM', '3.35', '有効', h.clock.now());
+  ok(r.ok === true && r.used === 1, '空白つきの端末IDも既存の行と一致(' + JSON.stringify(r) + ')');
+  ok(useRows(h).length === 2, '行は増えない');
+  ok(h.cache.has('lk_touch_' + TK + '_dev1'), '間引き札は正規化したキー・端末IDで置く');
+});
+test('hand_typed_key_rows_counted', () => {
+  const h = useBook([['lab-abcd-efgh', 'A社', 'd1', 'x', 'a', 'b', 1, 'v', '有効', ''], [' LAB ABCD EFGH ', 'A社', 'd2', 'x', 'a', 'b', 1, 'v', '有効', '']]);
+  const r = touch(h, mkEntry(2), 'd3');
+  ok(r.ok === false && r.reason === 'too_many', '手で直した小文字・空白のキーも数えて断る(' + JSON.stringify(r) + ')');
+});
+test('no_throttle_after_too_many_or_busy', () => {
+  const h = useBook([[TK, 'A社', 'd1', 'x', 'a', 'b', 1, 'v', '有効', '']]);
+  touch(h, mkEntry(1), 'd2');
+  ok(!h.cache.has('lk_touch_' + TK + '_d2'), 'too_many のあとは間引き札を置かない');
+  const o1 = h.calls.openById;
+  touch(h, mkEntry(1), 'd2');
+  ok(h.calls.openById > o1, '2回目はまた台帳を開く');
+  const h2 = useBook([]);
+  h2.cache.set('lk_ledger', { v: 'other', exp: h2.clock.now() + 3600 * 1000 });
+  touch(h2, mkEntry(5), 'd9');
+  ok(!h2.cache.has('lk_touch_' + TK + '_d9'), 'busy のあとは間引き札を置かない');
+  const o2 = h2.calls.openById;
+  touch(h2, mkEntry(5), 'd9');
+  ok(h2.calls.openById > o2, 'busy のあとの2回目はまた台帳を開く');
+});
+test('rereg_increments_count', () => {
+  const h = useBook([[TK, 'A社', 'dev1', 'SM-N986N', '2026/10/01 09:00', '2026/10/01 09:00', 1, '3.30', '有効', '']]);
+  touch(h, mkEntry(5), 'dev1');
+  ok(useRows(h)[1][6] === 2, '利用回数が1増える(' + useRows(h)[1][6] + ')');
+});
+test('missing_optional_header_logged_not_thrown', () => {
+  const hdr = ['キー', '会社名', '端末ID', '端末名（機種）', '初回利用', '最終利用', '利用回数', '版', '呼び名'];   // 最終判定が無い
+  const books = {}; books[LEDGER_ID] = { 'lab-kanri利用': [hdr] };
+  const h = harness.build({ books: books });
+  const logs = []; h.ctx.Logger.log = (m) => logs.push(String(m));
+  const r = touch(h, mkEntry(5), 'dev1');
+  ok(r.ok === true, '任意の見出しが無くても通る');
+  ok(logs.some(m => m.indexOf('最終判定') >= 0), '見出しが無いことを Logger.log に残す(' + logs.join('|') + ')');
+});
+
 
 for (const [name, fn] of tests) {
   try { fn(); } catch (e) { ok(false, name + ' が例外: ' + (e && e.stack || e)); }

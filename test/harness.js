@@ -27,14 +27,16 @@ class Range {
   setValue(v) { this.sh.set(this.r, this.c, v); return this; }
   setValues(m) { m.forEach((row, i) => row.forEach((v, j) => this.sh.set(this.r + i, this.c + j, v))); return this; }
   clearContent() { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) this.sh.set(this.r + i, this.c + j, ''); return this; }
-  setNumberFormat() { return this; } setBackground() { return this; } setFontWeight() { return this; } setFontColor() { return this; }
+  setNumberFormat(f) { for (let i = 0; i < this.nr; i++) for (let j = 0; j < this.nc; j++) this.sh.fmt[(this.r + i) + ',' + (this.c + j)] = f; return this; }
+  getNumberFormat() { return this.sh.fmt[this.r + ',' + this.c] || 'General'; }
+  setBackground() { return this; } setFontWeight() { return this; } setFontColor() { return this; }
   setDataValidation() { return this; } clearNote() { return this; } setNote() { return this; } getFormula() { return ''; }
 }
 class Sheet {
-  constructor(name, rows) { this.name = name; this.rows = (rows || []).map(r => r.slice()); }
+  constructor(name, rows) { this.name = name; this.rows = (rows || []).map(r => r.slice()); this.fmt = {}; this.log = []; }   // fmt=セルの書式 / log=書いたセル(試験用)
   getName() { return this.name; }
   get(r, c) { const row = this.rows[r - 1]; if (!row) return ''; const v = row[c - 1]; return v === undefined ? '' : v; }
-  set(r, c, v) { while (this.rows.length < r) this.rows.push([]); const row = this.rows[r - 1]; while (row.length < c) row.push(''); row[c - 1] = v; }
+  set(r, c, v) { this.log.push(r + ',' + c); while (this.rows.length < r) this.rows.push([]); const row = this.rows[r - 1]; while (row.length < c) row.push(''); row[c - 1] = v; }
   getLastRow() { return this.rows.length; }
   getLastColumn() { return Math.max(0, ...this.rows.map(r => r.length)); }
   getRange(r, c, nr = 1, nc = 1) { return new Range(this, r, c, nr, nc); }

@@ -256,6 +256,8 @@ function license_useScan_(tab, key, deviceId) {
 // - 同じ端末は1時間に1回しか書かない（CacheService）。間引き中は台帳を開かずに返す
 // - 書くのは台帳の札（lk_ledger）の中だけ。新しい端末は札の中で数え直す（最後の1枠を2台が取り合っても1台だけ）
 function license_touchDevice_(key, entry, deviceId, deviceName, appVersion, verdict, now) {
+  key = license_normalizeKey_(key) || String(key == null ? '' : key).trim();   // 照合も間引き札も同じ形で
+  deviceId = String(deviceId == null ? '' : deviceId).trim();   // 前後の空白で別端末にならないように
   const limit = entry.limit;
   const cache = CacheService.getScriptCache();
   const ckey = ('lk_touch_' + key + '_' + deviceId).slice(0, 250);
@@ -297,24 +299,33 @@ function license_touchDevice_(key, entry, deviceId, deviceName, appVersion, verd
         if (s.found >= 0) {   // 既にある端末：F〜I だけ書き直す（J 呼び名は触らない）
           const r = s.found + 1;
           const times = parseInt(String(s.values[s.found][c('利用回数')]), 10);
-          const put = (name, v, text) => { const col = c(name); if (col >= 0) { const rg = tab.getRange(r, col + 1); if (text) rg.setNumberFormat('@'); rg.setValue(v); } };
+          // 実際のSheetsは文字を入力と同じに解釈する（3.30→3.3・数字だけの端末ID→数値）ので、文字の列は書式'@'にしてから書く
+          const put = (name, v, text) => {
+            const col = c(name);
+            if (col < 0) { Logger.log('lab-kanri利用 に「' + name + '」の見出しがない（書かない）'); return; }
+            const rg = tab.getRange(r, col + 1);
+            if (text) rg.setNumberFormat('@');
+            rg.setValue(v);
+          };
           put('最終利用', stamp, true);
-          put('利用回数', (isNaN(times) ? 0 : times) + 1);
-          put('版', appVersion);
-          put('最終判定', verdict);
+          put('利用回数', (isNaN(times) ? 0 : times) + 1, false);   // 利用回数は数値のまま
+          put('版', appVersion, true);
+          put('最終判定', verdict, true);
           wrote = true;
           return { ok: true, used: s.used, limit: limit };
         }
         if (limit !== 0 && s.used >= limit) return fail('too_many', LICENSE_MSG_.too_many.replace('N', String(limit)));
-        const row = LICENSE_USE_HEADER_.map(() => '');
-        const width = Math.max(row.length, s.values[0].length);
-        while (row.length < width) row.push('');
-        const set = (name, v) => { const col = c(name); if (col >= 0) row[col] = v; };
-        set('キー', key); set('会社名', entry.company); set('端末ID', deviceId); set('端末名（機種）', deviceName);
-        set('初回利用', stamp); set('最終利用', stamp); set('利用回数', 1); set('版', appVersion); set('最終判定', verdict);
+        // 自分の列だけを1つずつ書く（呼び名や田中が足した列には触らない）。文字の列は書式'@'にしてから書く
         const r = s.values.length + 1;
-        ['初回利用', '最終利用'].forEach((n) => { if (c(n) >= 0) tab.getRange(r, c(n) + 1).setNumberFormat('@'); });   // 日付が日付型に化けないよう文字として書く
-        tab.getRange(r, 1, 1, width).setValues([row]);   // J（呼び名）は空のまま
+        const put = (name, v, text) => {
+          const col = c(name);
+          if (col < 0) { Logger.log('lab-kanri利用 に「' + name + '」の見出しがない（書かない）'); return; }
+          const rg = tab.getRange(r, col + 1);
+          if (text) rg.setNumberFormat('@');
+          rg.setValue(v);
+        };
+        put('キー', key, true); put('会社名', entry.company, true); put('端末ID', deviceId, true); put('端末名（機種）', deviceName, true);
+        put('初回利用', stamp, true); put('最終利用', stamp, true); put('利用回数', 1, false); put('版', appVersion, true); put('最終判定', verdict, true);
         wrote = true;
         return { ok: true, used: s.used + 1, limit: limit };
       };
