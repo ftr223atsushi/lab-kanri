@@ -466,13 +466,55 @@ test('different_sheets_do_not_wait', () => {
   ok(sheetLock(h, 'lk_ledger', () => 'ledger', BUSY) === 'ledger' && h.clock.now() === t0, 'lk_ledger も別の札');
 });
 test('lock_scriptlock_contended_gives_up', () => {
-  // ScriptLock が取れないままなら札を立てられず、30秒であきらめる(fn は呼ばない)
+  // ScriptLock が取れないままなら札を立てられず、30秒（待ちの1回分0.2秒まで）であきらめる(fn は呼ばない)
   const h = harness.build({});
   h.lockBusy = true;
+  const t0 = h.clock.now();
   let n = 0;
   const r = sheetLock(h, 'lk_A', () => { n++; return 'ran'; }, BUSY);
   ok(r === 'BUSY' && n === 0, 'ScriptLock が取れないままなら onBusy');
   ok(h.ctx.CacheService.getScriptCache().get('lk_A') === null, '札は立てていない');
+  const waited = h.clock.now() - t0;
+  ok(waited >= 30000 && waited <= 30200, 'ScriptLock 混雑でも30秒を超えない(' + waited + 'ms)');
+});
+test('cleanup_flush_throws_keeps_result', () => {
+  const h = harness.build({});
+  const cache = h.ctx.CacheService.getScriptCache();
+  h.ctx.SpreadsheetApp.flush = () => { throw new Error('flush NG'); };
+  let r, err = null;
+  try { r = sheetLock(h, 'lk_A', () => 'written', BUSY); } catch (e) { err = e; }
+  ok(err === null, 'flush の失敗は外へ出ない(' + (err && err.message) + ')');
+  ok(r === 'written', 'fn の戻り値がそのまま返る');
+  ok(cache.get('lk_A') === null, 'flush が失敗しても札は消える');
+  ok(!h.ctx.LockService.getScriptLock().hasLock(), 'ScriptLock は離している');
+});
+test('cleanup_remove_throws_keeps_result', () => {
+  const h = harness.build({});
+  const cache = h.ctx.CacheService.getScriptCache();
+  cache.remove = () => { throw new Error('remove NG'); };
+  let r, err = null;
+  try { r = sheetLock(h, 'lk_A', () => 'written', BUSY); } catch (e) { err = e; }
+  ok(err === null, 'cache.remove の失敗は外へ出ない(' + (err && err.message) + ')');
+  ok(r === 'written', 'fn の戻り値がそのまま返る');
+  ok(!h.ctx.LockService.getScriptLock().hasLock(), 'ScriptLock は離している');
+});
+test('cleanup_fn_and_flush_throw_fn_error_wins', () => {
+  const h = harness.build({});
+  const cache = h.ctx.CacheService.getScriptCache();
+  h.ctx.SpreadsheetApp.flush = () => { throw new Error('flush NG'); };
+  let err = null;
+  try { sheetLock(h, 'lk_A', () => { throw new Error('fn NG'); }, BUSY); } catch (e) { err = e; }
+  ok(err && err.message === 'fn NG', 'fn の例外がそのまま出る(' + (err && err.message) + ')');
+  ok(cache.get('lk_A') === null, '札は消える');
+});
+test('release_without_scriptlock_still_removes_flag', () => {
+  const h = harness.build({});
+  const cache = h.ctx.CacheService.getScriptCache();
+  let relAtFn = null;
+  const r = sheetLock(h, 'lk_A', () => { h.lockBusy = true; relAtFn = h.calls.releaseLock; return 'ok'; }, BUSY);
+  ok(r === 'ok', 'fn の戻り値が返る');
+  ok(cache.get('lk_A') === null, 'ScriptLock が取れなくても自分の札は消す');
+  ok(h.calls.releaseLock === relAtFn, '取れなかった分の releaseLock は呼ばない(' + relAtFn + '→' + h.calls.releaseLock + ')');
 });
 
 for (const [name, fn] of tests) {

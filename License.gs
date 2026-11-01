@@ -181,16 +181,19 @@ const LICENSE_FLAG_POLL_MS_ = 200;     // 待ちは0.2秒ごと
 const LICENSE_SCRIPTLOCK_MS_ = 5000;   // ScriptLock は最長5秒
 
 // lockKey の札を立てて fn() を実行し、戻り値を返す。30秒立てられなければ onBusy() の戻り値を返す（fn は呼ばない）。
-// fn が例外を投げても札は消してから例外を外へ出す。
+// fn が例外を投げても札は消してから例外を外へ出す。後始末(flush・札を消す)の失敗は記録だけで、fn の結果は変えない
+// （書けたスキャンを「エラー」と返すと、利用者が撮り直して二重に記録するため）。
 function license_withSheetLock_(lockKey, fn, onBusy) {
   const cache = CacheService.getScriptCache();
   const lock = LockService.getScriptLock();
   const token = Utilities.getUuid();
   const t0 = Date.now();
   let taken = false;
-  while (!taken) {
+  for (;;) {
+    const remain = LICENSE_FLAG_WAIT_MS_ - (Date.now() - t0);   // 全体で30秒を超えないよう、ScriptLock の待ちも残りに合わせる
+    if (remain <= 0) return onBusy();
     // 確認と立てるのを同時に2台がやらないよう、ここだけ ScriptLock で守る（取れたらすぐ離す）
-    if (lock.tryLock(LICENSE_SCRIPTLOCK_MS_)) {
+    if (lock.tryLock(Math.min(LICENSE_SCRIPTLOCK_MS_, remain))) {
       try {
         if (!cache.get(lockKey)) { cache.put(lockKey, token, LICENSE_FLAG_SEC_); taken = true; }
       } finally { lock.releaseLock(); }
@@ -202,16 +205,24 @@ function license_withSheetLock_(lockKey, fn, onBusy) {
   try {
     return fn();
   } finally {
+    // finally の中で投げると fn の戻り値・例外が上書きされるので、後始末は必ず握りつぶして記録だけする
     try { SpreadsheetApp.flush(); }   // 書き込みを確定してから札を消す（次の人が古い中身を読まないように）
-    finally { license_releaseFlag_(cache, lock, lockKey, token); }
+    catch (e) { Logger.log('license_withSheetLock_ flush失敗: ' + e); }
+    license_releaseFlag_(cache, lock, lockKey, token);
   }
 }
 
-// 札が自分の印のときだけ消す（寿命が切れて他の端末が立て直した札は消さない）
+// 札が自分の印のときだけ消す（寿命が切れて他の端末が立て直した札は消さない）。失敗しても例外は出さない
 function license_releaseFlag_(cache, lock, lockKey, token) {
   let got = false;
-  try { got = lock.tryLock(LICENSE_SCRIPTLOCK_MS_); } catch (e) { got = false; }   // 取れなくても札は消す（残すと次の人が30秒待つ）
   try {
+    // ScriptLock が取れなくても札は消しに行く（残すと次の人が30秒待つ）。自分の印の札がある間は他の端末は立てられないので
+    // 競合するのは、確認と消すの間にちょうど札の寿命30秒が切れる瞬間だけ（fn が約30秒かかったときのみ）
+    try { got = lock.tryLock(LICENSE_SCRIPTLOCK_MS_); } catch (e) { got = false; }
     if (cache.get(lockKey) === token) cache.remove(lockKey);
-  } finally { if (got) lock.releaseLock(); }
+  } catch (e) {
+    Logger.log('license_withSheetLock_ 札を消せず: ' + e);
+  } finally {
+    if (got) { try { lock.releaseLock(); } catch (e) { Logger.log('license_withSheetLock_ ScriptLock解放失敗: ' + e); } }
+  }
 }
