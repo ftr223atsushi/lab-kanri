@@ -413,9 +413,10 @@ function doGet() {
 // 複数台で同じシートに同時に書くと、①同じコードを2台がほぼ同時に読むと両方が「まだ空」と見て二重に書く
 // ②ラベル印刷の控えは末尾に行を足すので、同時だと片方が上書きされる、が起きうる。
 // 待つのは前の書き込みが終わるまで (普通は1秒未満)。読むだけの処理 (表示・日報) は待たせない。
+// v3.35: シートに書く4種 (handleScan など) はシートごとの順番待ち license_withSheetLock_ に移した (License.gs)。
+// ここに残すのはスクリプトのプロパティに書く2種だけ (入れ子にしないため、4種はここに置かない)。
 const WRITE_ACTIONS_ = {
-  handleScan: true, savePickupExtra: true, undoRecord: true,
-  markCodeLabelPrinted: true, setLabelSiteName: true, addWorker: true
+  setLabelSiteName: true, addWorker: true
 };
 function withWriteLock_(fn) {
   const lock = LockService.getScriptLock();
@@ -431,17 +432,50 @@ function withWriteLock_(fn) {
 }
 
 function doPost(e) {
-  const respond = function(obj) {
+  const rawRespond = function(obj) {
     return ContentService
       .createTextOutput(JSON.stringify(obj))
       .setMimeType(ContentService.MimeType.JSON);
+  };
+  let notice = null;   // v3.35: キー無しで猶予中のときだけ応答に licenseNotice を足す
+  const respond = function(obj) {
+    if (notice && obj && typeof obj === 'object' && !Array.isArray(obj)) {
+      obj = Object.assign({}, obj, { licenseNotice: notice });
+    }
+    return rawRespond(obj);
   };
 
   try {
     const raw = (e && e.postData && e.postData.contents) ? e.postData.contents : '{}';
     const p = JSON.parse(raw);
     const action = p.action || '';
-    if (WRITE_ACTIONS_[action]) {
+    const now = new Date().getTime();
+
+    // v3.35: 入口の判定 (License.gs)。知らない action・ping は素通し、checkLicense は自分で確かめる
+    const gate = license_gate_(action, p, now);
+    if (!gate.allow) return respond(gate.response);
+    if (gate.notice) notice = gate.notice;
+
+    if (action === 'checkLicense') return respond(license_checkLicenseAction_(p, now));
+    if (action === 'listSites') {
+      let sites;
+      try { sites = license_listSites_(gate.folderId); }
+      catch (err) {
+        Logger.log('現場シートの一覧を読めない: ' + err);
+        return respond(license_refuse_('ledger_unavailable'));
+      }
+      return respond({ ok: true, company: gate.company, sites: sites });
+    }
+    // 書き込み4種：シートごとの順番待ち (札のキー lk_<シートID>)。ScriptLock の withWriteLock_ とは重ねない
+    if (license_has_(LICENSE_WRITE_ACTIONS_, action)) {
+      const sid = parseSpreadsheetIdFromInput(p.spreadsheetId);
+      if (sid) {
+        return license_withSheetLock_('lk_' + sid, function() { return doPostAction_(action, p, respond); },
+          function() { return respond({ ok: false, message: LICENSE_MSG_.busy }); });
+      }
+      return doPostAction_(action, p, respond);   // IDが無ければ書く先が無い (action 側が未設定エラーを返す)
+    }
+    if (Object.prototype.hasOwnProperty.call(WRITE_ACTIONS_, action) && WRITE_ACTIONS_[action]) {
       return withWriteLock_(function() { return doPostAction_(action, p, respond); });
     }
     return doPostAction_(action, p, respond);

@@ -963,6 +963,224 @@ test('appsscript_drive_service', () => {
 });
 
 
+// ---- Task 6：入口の判定（doPost 経由）----
+const GDR = 'DRIVE_HSS';   // K1(shast-hsseng) の共有ドライブ
+const gateEnv = (o) => {
+  o = o || {};
+  const files = {
+    FOH: DF('現場シート', { mimeType: MIME_F, parents: [GDR], driveId: GDR }),
+    SIN: DF('in', { parents: ['FOH'], driveId: GDR, modifiedTime: '2026-10-01T00:00:00.000Z' }),
+    SOUT: DF('out', { parents: ['ELSE'], driveId: GDR })
+  };
+  const h = harness.build({ books: ledgerBook(o.ledger), drive: { files: files } });
+  h.ran = [];
+  if (!o.real) h.ctx.doPostAction_ = (action, p, respond) => { h.ran.push(action); return respond({ ok: true, ran: action }); };
+  return h;
+};
+const REQ = (extra) => Object.assign({ licenseKey: K1, deviceId: 'DEV1', deviceName: 'SM-N986N', appVersion: '3.35-X' }, extra);
+const usageTab = (h) => h.books[LEDGER_ID].sheets.find(s => s.name === 'lab-kanri利用');
+const gpost = (h, obj) => harness.post(h, obj);
+const IN_URL = 'https://docs.google.com/spreadsheets/d/SIN/edit#gid=0', OUT_URL = 'https://docs.google.com/spreadsheets/d/SOUT/edit';
+
+test('ping_no_check', () => {
+  const h = gateEnv({ real: true });
+  h.failOpen.add(LEDGER_ID);
+  const r = gpost(h, { action: 'ping' });
+  ok(r.ok === true && r.message === 'pong' && r.licenseNotice === undefined, 'ping は台帳が読めなくても ok・お知らせなし(' + JSON.stringify(r) + ')');
+  ok(h.calls.openById === 0, 'ping は台帳を開かない');
+  const r2 = gpost(h, { action: 'ping', licenseKey: 'LAB-ZZZZ-ZZZZ' });
+  ok(r2.ok === true, '変なキーを付けても ping は通る');
+});
+test('ping_works_when_ledger_unreadable', () => {
+  const h = gateEnv({ real: true });
+  h.failOpen.add(LEDGER_ID);
+  ok(gpost(h, { action: 'ping' }).ok === true, '台帳が読めなくても ping は ok');
+});
+test('checkLicense_no_gate', () => {
+  const h = gateEnv({ ledger: { grace: '2026-11-01' } });   // 猶予明け
+  const r = gpost(h, { action: 'checkLicense' });
+  ok(r.ok === false && r.reason === 'no_key' && r.message === EXPECTED_MSG.no_key, 'checkLicense はゲートに止められず自分で no_key を返す(' + JSON.stringify(r) + ')');
+  ok(r.inGrace === false && r.daysLeft === -1, 'inGrace/daysLeft が付く(' + r.inGrace + '/' + r.daysLeft + ')');
+  ok(h.ran.length === 0, 'doPostAction_ へは行かない');
+});
+test('no_key_in_grace_passes_any_sheet', () => {
+  const h = gateEnv();
+  const r = gpost(h, { action: 'handleScan', spreadsheetId: 'SOUT' });   // フォルダの外でも通る
+  ok(r.ok === true && h.ran.join() === 'handleScan', 'キー無し猶予中はどのシートでも通る(' + JSON.stringify(r) + ')');
+  ok(r.licenseNotice && r.licenseNotice.daysLeft === 17, 'licenseNotice.daysLeft=17(' + JSON.stringify(r.licenseNotice) + ')');
+  ok(usageTab(h) === undefined, '利用タブは書かない');
+  const r2 = gpost(h, REQ({ action: 'getWorkerList' }));
+  ok(r2.ok === true && r2.licenseNotice === undefined, 'キーがあれば licenseNotice は付かない');
+});
+test('no_key_after_grace_refused', () => {
+  const h = gateEnv({ ledger: { grace: '2026-11-01' } });
+  for (const a of ['handleScan', 'getWorkerList', 'getSpreadsheetMeta', 'verifyPassword']) {
+    const r = gpost(h, { action: a, spreadsheetId: 'SIN' });
+    ok(r.ok === false && r.reason === 'no_key' && r.message === EXPECTED_MSG.no_key, a + ': no_key の文のとおり(' + JSON.stringify(r) + ')');
+  }
+  ok(h.ran.length === 0, '処理は走らない');
+  ok(gpost(h, { action: 'ping' }).ok === true, 'ping は猶予明けでも通る');
+});
+test('no_key_ledger_unavailable_passes_in_grace', () => {
+  const h = gateEnv();
+  h.failOpen.add(LEDGER_ID);
+  const r = gpost(h, { action: 'handleScan', spreadsheetId: 'SOUT' });
+  ok(r.ok === true && h.ran.join() === 'handleScan', 'キー無し＋台帳が読めない＝猶予中として通す(' + JSON.stringify(r) + ')');
+  ok(r.licenseNotice && r.licenseNotice.daysLeft === null, 'daysLeft は null');
+});
+test('key_ledger_unavailable_refused', () => {
+  const h = gateEnv();
+  h.failOpen.add(LEDGER_ID);
+  const r = gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' }));
+  ok(r.ok === false && r.reason === 'ledger_unavailable' && r.message === EXPECTED_MSG.ledger_unavailable, 'キーあり＋台帳が読めない＝ledger_unavailable(' + JSON.stringify(r) + ')');
+  ok(h.ran.length === 0, '処理は走らない');
+});
+test('listSites_requires_key_even_in_grace', () => {
+  const h = gateEnv();
+  const r = gpost(h, { action: 'listSites' });
+  ok(r.ok === false && r.reason === 'no_key' && r.message === EXPECTED_MSG.no_key, '猶予中でもキーが無ければ no_key(' + JSON.stringify(r) + ')');
+  h.failOpen.add(LEDGER_ID);
+  h.cache.clear();
+  ok(gpost(h, { action: 'listSites' }).reason === 'no_key', '台帳が読めなくても no_key');
+});
+test('listSites_returns_company_and_sites', () => {
+  const h = gateEnv();
+  const r = gpost(h, REQ({ action: 'listSites' }));
+  ok(r.ok === true && r.company === 'HSSエンジニヤリング', 'company(' + JSON.stringify(r) + ')');
+  ok(Array.isArray(r.sites) && r.sites.length === 1 && r.sites[0].id === 'SIN' && r.sites[0].name === 'in', 'sites はフォルダ直下だけ(' + JSON.stringify(r.sites) + ')');
+  ok(h.ran.length === 0, 'doPostAction_ へは行かない');
+});
+test('listSites_drive_error_unavailable', () => {
+  const h = gateEnv();
+  h.ctx.license_siteFolder_(GDR);   // フォルダIDを覚えさせる（ゲートは通り、一覧だけが失敗する状態）
+  h.failDrive = true;
+  const r = gpost(h, REQ({ action: 'listSites' }));
+  ok(r.ok === false && r.reason === 'ledger_unavailable' && r.message === EXPECTED_MSG.ledger_unavailable, '一覧の Drive 失敗は ledger_unavailable(' + JSON.stringify(r) + ')');
+});
+test('key_ok_inside_passes', () => {
+  const h = gateEnv();
+  const r = gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' }));
+  ok(r.ok === true && h.ran.join() === 'handleScan', 'フォルダの中のシートは通る(' + JSON.stringify(r) + ')');
+  const u = usageTab(h);
+  ok(u && u.rows.length === 2 && u.rows[1][2] === 'DEV1' && u.rows[1][8] === '有効', '通ったら利用タブに最終判定「有効」(' + JSON.stringify(u && u.rows) + ')');
+  ok(r.licenseNotice === undefined, 'キーありに licenseNotice は付かない');
+});
+test('key_ok_outside_refused', () => {
+  const h = gateEnv();
+  const r = gpost(h, REQ({ action: 'getKentaiData', spreadsheetId: 'SOUT' }));
+  ok(r.ok === false && r.reason === 'outside' && r.message === EXPECTED_MSG.outside, '外のシートは outside(' + JSON.stringify(r) + ')');
+  ok(h.ran.length === 0, '処理は走らない');
+});
+test('getSpreadsheetMeta_url_extracted_and_checked', () => {
+  const h = gateEnv();
+  const r = gpost(h, REQ({ action: 'getSpreadsheetMeta', spreadsheetId: IN_URL }));
+  ok(r.ok === true && h.ran.join() === 'getSpreadsheetMeta', '中のシートの URL は通る(' + JSON.stringify(r) + ')');
+  const r2 = gpost(h, REQ({ action: 'getSpreadsheetMeta', spreadsheetId: OUT_URL }));
+  ok(r2.ok === false && r2.reason === 'outside', '外のシートの URL は断る(' + JSON.stringify(r2) + ')');
+  const r3 = gpost(h, REQ({ action: 'getSpreadsheetMeta', spreadsheetId: 'shast:sheet:' + IN_URL }));
+  ok(r3.ok === true, 'shast:sheet: 付きも同じ解釈で通る');
+});
+test('sheet_action_no_id_refused_with_key', () => {
+  const h = gateEnv();
+  for (const id of ['', undefined, '   ']) {
+    const r = gpost(h, REQ({ action: 'handleScan', spreadsheetId: id }));
+    ok(r.ok === false && r.reason === 'outside', 'ID が取れなければ outside(' + JSON.stringify(id) + ' → ' + JSON.stringify(r) + ')');
+  }
+  ok(h.ran.length === 0, '処理は走らない');
+  ok(usageTab(h) === undefined, '断りは利用タブに書かない');
+});
+test('key_suspended_refused', () => {
+  const h = gateEnv();
+  const r = gpost(h, REQ({ licenseKey: K2, action: 'handleScan', spreadsheetId: 'SIN' }));
+  ok(r.ok === false && r.reason === 'suspended' && r.message === EXPECTED_MSG.suspended, '停止(' + JSON.stringify(r) + ')');
+  const u = gpost(h, REQ({ licenseKey: 'LAB-ZZZZ-ZZZZ', action: 'getWorkerList' }));
+  ok(u.reason === 'unknown_key', '未登録キー');
+  const e = gpost(h, REQ({ licenseKey: K3, action: 'getWorkerList' }));
+  ok(e.reason === 'expired' && e.message.indexOf('2026/11/01') >= 0, '期限切れ');
+  const n = gpost(h, REQ({ deviceId: '', action: 'getWorkerList' }));
+  ok(n.reason === 'no_device' && n.message === EXPECTED_MSG.no_device, '端末番号なし');
+  ok(h.ran.length === 0, '処理は走らない');
+  ok(usageTab(h) === undefined, '断りは利用タブに書かない');
+});
+test('too_many_refused', () => {
+  const h = gateEnv({ ledger: { lab: [[K1, 'HSSエンジニヤリング', 'shast-hsseng', '有効', '', '1', '']] } });
+  ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' })).ok === true, '1台目は通る');
+  const r = gpost(h, REQ({ deviceId: 'DEV2', action: 'handleScan', spreadsheetId: 'SIN' }));
+  ok(r.ok === false && r.reason === 'too_many' && r.message === EXPECTED_MSG.too_many.replace('N', '1'), '2台目は too_many(' + JSON.stringify(r) + ')');
+  ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' })).ok === true, '登録済みの端末は引き続き通る');
+});
+test('non_sheet_action_skips_folder_check', () => {
+  const h = gateEnv({ ledger: { lab: [['LAB-GGGG-HHHH', '共有ドライブ未設定の会社', 'nodrive', '有効', '', '', ''], [K2, '停止中の会社', 'shast-stop', '停止', '', '5', '']] } });
+  for (const a of ['getWorkerList', 'addWorker', 'setCurrentWorker', 'verifyPassword', 'changePassword']) {
+    const r = gpost(h, REQ({ licenseKey: 'LAB-GGGG-HHHH', action: a }));
+    ok(r.ok === true && h.ran[h.ran.length - 1] === a, a + ' はキーだけ確かめて通る(' + JSON.stringify(r) + ')');
+  }
+  ok(h.calls.driveList === 0 && h.calls.driveGet === 0, 'Drive は呼ばない');
+  const s = gpost(h, REQ({ licenseKey: 'LAB-GGGG-HHHH', action: 'handleScan', spreadsheetId: 'SIN' }));
+  ok(s.ok === false && s.reason === 'no_folder' && s.message === EXPECTED_MSG.no_folder, 'シートの action は共有ドライブが無ければ no_folder(' + JSON.stringify(s) + ')');
+  ok(gpost(h, REQ({ licenseKey: K2, action: 'getWorkerList' })).reason === 'suspended', '非シート action もキーは確かめる');
+});
+test('checkLicense_returns_company_and_count', () => {
+  const h = gateEnv();
+  const r = gpost(h, REQ({ action: 'checkLicense' }));
+  ok(r.ok === true && r.companyName === 'HSSエンジニヤリング' && r.expires === '2027/04/13', '会社名・期限(' + JSON.stringify(r) + ')');
+  ok(r.used === 1 && r.limit === 5, 'used=1 limit=5');
+  ok(r.inGrace === true && r.daysLeft === 17, '猶予 inGrace/daysLeft');
+  const u = usageTab(h);
+  ok(u && u.rows.length === 2 && u.rows[1][2] === 'DEV1', 'checkLicense で端末が登録される');
+  const r2 = gpost(h, REQ({ deviceId: 'DEV2', action: 'checkLicense' }));
+  ok(r2.ok === true && r2.used === 2, '2台目で used=2');
+  const bad = gpost(h, REQ({ licenseKey: 'LAB-ZZZZ-ZZZZ', action: 'checkLicense' }));
+  ok(bad.ok === false && bad.reason === 'unknown_key' && bad.message === EXPECTED_MSG.unknown_key, '未登録キー');
+  const nk = gpost(h, { action: 'checkLicense' });
+  ok(nk.ok === false && nk.reason === 'no_key' && nk.inGrace === true && nk.daysLeft === 17, 'キー無し(' + JSON.stringify(nk) + ')');
+  h.failOpen.add(LEDGER_ID); h.cache.clear(); h.props.clear();
+  const un = gpost(h, REQ({ action: 'checkLicense' }));
+  ok(un.ok === false && un.reason === 'ledger_unavailable', '台帳が読めない');
+});
+test('unknown_action_message_unchanged', () => {
+  const h = gateEnv({ real: true, ledger: { grace: '2026-11-01' } });
+  ok(gpost(h, { action: 'fooBar' }).message === 'unknown action: fooBar', 'キー無し・猶予明けでも unknown action のまま');
+  const r = gpost(h, REQ({ licenseKey: 'LAB-ZZZZ-ZZZZ', action: 'fooBar' }));
+  ok(r.ok === false && r.message === 'unknown action: fooBar' && r.reason === undefined, '変なキーでも unknown action のまま(' + JSON.stringify(r) + ')');
+  ok(gpost(h, { action: 'constructor' }).message === 'unknown action: constructor', '継承されたプロパティ名も未知の action');
+  ok(gpost(h, { action: '' }).message === 'unknown action: ', '空の action も同じ');
+});
+test('write_action_uses_sheet_lock_not_script_lock', () => {
+  const h = gateEnv({ real: true });
+  let wl = 0; const origWl = h.ctx.withWriteLock_;
+  h.ctx.withWriteLock_ = (fn) => { wl++; return origWl(fn); };
+  const seen = {};
+  h.ctx.handleScan = (id) => { seen.handleScan = h.cache.has('lk_' + h.ctx.parseSpreadsheetIdFromInput(id)); return { ok: true }; };
+  h.ctx.savePickupExtra = (id) => { seen.savePickupExtra = h.cache.has('lk_' + h.ctx.parseSpreadsheetIdFromInput(id)); return { ok: true }; };
+  h.ctx.undoRecord = (id) => { seen.undoRecord = h.cache.has('lk_' + h.ctx.parseSpreadsheetIdFromInput(id)); return { ok: true }; };
+  h.ctx.markCodeLabelPrinted = (id) => { seen.markCodeLabelPrinted = h.cache.has('lk_' + h.ctx.parseSpreadsheetIdFromInput(id)); return { ok: true }; };
+  h.ctx.setLabelSiteName = () => ({ ok: true });
+  h.ctx.addWorker = () => ({ ok: true });
+  for (const a of ['handleScan', 'savePickupExtra', 'undoRecord', 'markCodeLabelPrinted']) {
+    const r = gpost(h, REQ({ action: a, spreadsheetId: IN_URL }));
+    ok(r.ok === true, a + ' は通る');
+    ok(seen[a] === true, a + ': 実行中は lk_<シートID> の札が立っている');
+  }
+  ok(wl === 0, '書き込み4種は withWriteLock_ を通らない(' + wl + ')');
+  ok(!h.cache.has('lk_SIN'), '終わったら札は消える');
+  gpost(h, REQ({ action: 'setLabelSiteName', spreadsheetId: 'SIN' }));
+  gpost(h, REQ({ action: 'addWorker' }));
+  ok(wl === 2, 'setLabelSiteName・addWorker は今の withWriteLock_ のまま(' + wl + ')');
+  ok(h.eval('Object.keys(WRITE_ACTIONS_).sort().join()') === 'addWorker,setLabelSiteName', 'WRITE_ACTIONS_ は2件だけ');
+});
+test('busy_answer_shape', () => {
+  const h = gateEnv({ real: true });
+  let ran = 0;
+  h.ctx.handleScan = () => { ran++; return { ok: true }; };
+  ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' })).ok === true, '登録のため1回通す');
+  h.lockBusy = true;
+  const r = gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' }));
+  ok(r.ok === false && r.message === EXPECTED_MSG.busy && Object.keys(r).sort().join() === 'message,ok', '混み合い時の応答は {ok:false, message} のみ(' + JSON.stringify(r) + ')');
+  ok(ran === 1, '混み合っていれば処理は走らない');
+});
+
+
 for (const [name, fn] of tests) {
   try { fn(); } catch (e) { ok(false, name + ' が例外: ' + (e && e.stack || e)); }
 }

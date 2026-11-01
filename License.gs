@@ -415,3 +415,88 @@ function license_listSites_(folderId) {
     return { id: f.id, name: f.name, modified: isNaN(t) ? 0 : t };
   });
 }
+
+// ---- 入口の判定と新しい action（SPEC 3-2・3-4）----
+
+// v3.35: 判定するのは「知っている action」だけ。知らない action は判定せず doPostAction_ に渡し、
+// 今までどおり 'unknown action: X' を返す（アプリが古いサーバーをこの文で見分けるため）。
+// シートIDを使う action（置き場所の確認が要る）
+const LICENSE_SHEET_ACTIONS_ = {
+  handleScan: true, savePickupExtra: true, undoRecord: true, getSpreadsheetMeta: true,
+  getDailyReportData: true, listDailyReportDates: true, getKentaiData: true, getSaishuAll: true,
+  getLabelSiteName: true, setLabelSiteName: true, getLabelPrinted: true, markCodeLabelPrinted: true
+};
+// シートに書く action（シートごとの順番待ち lk_<シートID> を通す）
+const LICENSE_WRITE_ACTIONS_ = {
+  handleScan: true, savePickupExtra: true, undoRecord: true, markCodeLabelPrinted: true
+};
+// シートを使わない action（キーの確認だけ）
+const LICENSE_PLAIN_ACTIONS_ = {
+  getWorkerList: true, addWorker: true, setCurrentWorker: true, verifyPassword: true, changePassword: true
+};
+
+// オブジェクトが自分で持つ名前だけ true（'constructor' などの継承された名前を除く）
+function license_has_(table, name) { return Object.prototype.hasOwnProperty.call(table, name) && table[name] === true; }
+
+function license_refuse_(reason, message) {
+  return { ok: false, reason: reason, message: message || LICENSE_MSG_[reason] };
+}
+
+// 入口の判定。{allow:true, notice?, company?, folderId?, spreadsheetId?} | {allow:false, response}
+// 順番：キー無し→猶予 ／ キー→台帳→端末の登録→(シートの action だけ)置き場所。拒否は利用タブに書かない
+function license_gate_(action, p, now) {
+  if (action === 'ping' || action === 'checkLicense') return { allow: true };   // ping は判定なし・checkLicense は自分で確かめる
+  const isList = action === 'listSites';
+  const isSheet = license_has_(LICENSE_SHEET_ACTIONS_, action);
+  if (!isList && !isSheet && !license_has_(LICENSE_PLAIN_ACTIONS_, action)) return { allow: true };   // 知らない action は素通し
+
+  const deny = (reason, message) => ({ allow: false, response: license_refuse_(reason, message) });
+  const key = String(p.licenseKey == null ? '' : p.licenseKey).trim();
+
+  if (!key) {
+    if (isList) return deny('no_key');   // 一覧は猶予中でもキーが要る
+    const g = license_grace_(license_ledger_(now), now);   // 台帳が読めない(null)＝猶予中として通す
+    if (g.inGrace) return { allow: true, notice: { daysLeft: g.daysLeft } };
+    return deny('no_key');
+  }
+
+  const ledger = license_ledger_(now);
+  if (!ledger) return deny('ledger_unavailable');
+  const ck = license_checkKey_(ledger, key, p.deviceId, now);
+  if (!ck.ok) return deny(ck.reason, ck.message);
+
+  let id = '';
+  if (isSheet) {
+    id = parseSpreadsheetIdFromInput(p.spreadsheetId);   // getSpreadsheetMeta は URL が来る。action と同じ読み方でIDを取る
+    if (!id) return deny('outside');
+  }
+
+  const t = license_touchDevice_(ck.key, ck.entry, p.deviceId, String(p.deviceName || ''), String(p.appVersion || ''), '有効', now);
+  if (!t.ok) return deny(t.reason, t.message);
+  if (!isSheet && !isList) return { allow: true, company: ck.entry.company };
+
+  const driveId = ledger.drives && ledger.drives[ck.entry.conn];
+  if (!driveId) return deny('no_folder');
+  const f = license_siteFolder_(driveId);
+  if (!f.ok) return deny(f.reason, f.message);
+  if (isSheet) {
+    const s = license_sheetAllowed_(id, f.folderId);
+    if (!s.ok) return deny(s.reason, s.message);
+  }
+  return { allow: true, company: ck.entry.company, folderId: f.folderId, spreadsheetId: id };
+}
+
+// checkLicense：キー登録・起動時・版の表示で使う。有効なキーなら端末もここで登録される
+function license_checkLicenseAction_(p, now) {
+  const key = String(p.licenseKey == null ? '' : p.licenseKey).trim();
+  const ledger = license_ledger_(now);
+  const g = license_grace_(ledger, now);
+  const withGrace = (r) => { r.inGrace = g.inGrace; r.daysLeft = g.daysLeft; return r; };
+  if (!key) return withGrace(license_refuse_('no_key'));
+  if (!ledger) return license_refuse_('ledger_unavailable');
+  const ck = license_checkKey_(ledger, key, p.deviceId, now);
+  if (!ck.ok) return withGrace(license_refuse_(ck.reason, ck.message));
+  const t = license_touchDevice_(ck.key, ck.entry, p.deviceId, String(p.deviceName || ''), String(p.appVersion || ''), '有効', now);
+  if (!t.ok) return withGrace(license_refuse_(t.reason, t.message));
+  return { ok: true, companyName: ck.entry.company, expires: ck.entry.expires, used: t.used, limit: t.limit, inGrace: g.inGrace, daysLeft: g.daysLeft };
+}
