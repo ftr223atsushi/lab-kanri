@@ -171,3 +171,47 @@ function license_checkKey_(ledger, key, deviceId, now) {
   if (!deviceId) return fail('no_device');
   return { ok: true, key: k, entry: entry };
 }
+
+// ---- シートごとの順番待ち（SPEC 3-5）----
+// 全社共通の ScriptLock を奪い合うと別々のシートに書く端末まで待つので、シートごとの「札」（CacheService）で待つ。
+// 札のキーは lk_<シートID>（台帳への書き込みは lk_ledger）。ScriptLock は札の確認と立てる一瞬だけ使う。
+const LICENSE_FLAG_SEC_ = 30;          // 札の寿命(秒)。fn が長引いて切れても、消すのは自分の印のときだけ
+const LICENSE_FLAG_WAIT_MS_ = 30000;   // 札が立てられるまで最長30秒待つ
+const LICENSE_FLAG_POLL_MS_ = 200;     // 待ちは0.2秒ごと
+const LICENSE_SCRIPTLOCK_MS_ = 5000;   // ScriptLock は最長5秒
+
+// lockKey の札を立てて fn() を実行し、戻り値を返す。30秒立てられなければ onBusy() の戻り値を返す（fn は呼ばない）。
+// fn が例外を投げても札は消してから例外を外へ出す。
+function license_withSheetLock_(lockKey, fn, onBusy) {
+  const cache = CacheService.getScriptCache();
+  const lock = LockService.getScriptLock();
+  const token = Utilities.getUuid();
+  const t0 = Date.now();
+  let taken = false;
+  while (!taken) {
+    // 確認と立てるのを同時に2台がやらないよう、ここだけ ScriptLock で守る（取れたらすぐ離す）
+    if (lock.tryLock(LICENSE_SCRIPTLOCK_MS_)) {
+      try {
+        if (!cache.get(lockKey)) { cache.put(lockKey, token, LICENSE_FLAG_SEC_); taken = true; }
+      } finally { lock.releaseLock(); }
+    }
+    if (taken) break;
+    if (Date.now() - t0 >= LICENSE_FLAG_WAIT_MS_) return onBusy();
+    Utilities.sleep(LICENSE_FLAG_POLL_MS_);
+  }
+  try {
+    return fn();
+  } finally {
+    try { SpreadsheetApp.flush(); }   // 書き込みを確定してから札を消す（次の人が古い中身を読まないように）
+    finally { license_releaseFlag_(cache, lock, lockKey, token); }
+  }
+}
+
+// 札が自分の印のときだけ消す（寿命が切れて他の端末が立て直した札は消さない）
+function license_releaseFlag_(cache, lock, lockKey, token) {
+  let got = false;
+  try { got = lock.tryLock(LICENSE_SCRIPTLOCK_MS_); } catch (e) { got = false; }   // 取れなくても札は消す（残すと次の人が30秒待つ）
+  try {
+    if (cache.get(lockKey) === token) cache.remove(lockKey);
+  } finally { if (got) lock.releaseLock(); }
+}

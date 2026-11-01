@@ -392,6 +392,89 @@ test('snapshot_too_big_does_not_break_read', () => {
   ok(led && led.fromSnapshot === false && Object.keys(led.keys).length > 100, '読めて返る');
 });
 
+// ---- シートごとの順番待ち（Task 3）----
+const sheetLock = (h, key, fn, onBusy) => h.ctx.license_withSheetLock_(key, fn, onBusy);
+const BUSY = () => 'BUSY';
+
+test('lock_free_runs_once', () => {
+  const h = harness.build({});
+  let n = 0, seen = null;
+  const r = sheetLock(h, 'lk_A', () => { n++; seen = h.ctx.CacheService.getScriptCache().get('lk_A'); return 'done'; }, BUSY);
+  ok(r === 'done', 'fn の戻り値が返る');
+  ok(n === 1, 'fn は1回');
+  ok(seen && seen.length > 8, '走っている間は自分の印の札が立っている');
+  ok(h.ctx.CacheService.getScriptCache().get('lk_A') === null, '終わったら札は消える');
+  ok(h.calls.flush === 1, 'flush が呼ばれる(' + h.calls.flush + ')');
+  ok(h.calls.tryLock === h.calls.releaseLock && !h.ctx.LockService.getScriptLock().hasLock(), 'ScriptLock は離している');
+  ok(h.calls.sleep === 0, '空いていれば待たない');
+});
+test('lock_waits_then_runs', () => {
+  const h = harness.build({});
+  const cache = h.ctx.CacheService.getScriptCache();
+  cache.put('lk_A', 'someone-else', 10);   // 他の端末の札（寿命10秒）
+  const t0 = h.clock.now();
+  let startedAt = null, n = 0;
+  const r = sheetLock(h, 'lk_A', () => { n++; startedAt = h.clock.now(); return 'ran'; }, BUSY);
+  ok(r === 'ran' && n === 1, '札が切れたあとで fn が走る');
+  ok(startedAt - t0 >= 10000, '時計が10秒以上進んでから(' + (startedAt - t0) + 'ms)');
+  ok(startedAt - t0 < 11000, '切れてすぐ走る(' + (startedAt - t0) + 'ms)');
+  ok(h.calls.sleep >= 50, '0.2秒ずつ待った(' + h.calls.sleep + '回)');
+  ok(cache.get('lk_A') === null, '終わったら札は消える');
+});
+test('lock_busy_after_30s', () => {
+  const h = harness.build({});
+  const cache = h.ctx.CacheService.getScriptCache();
+  cache.put('lk_A', 'someone-else', 60);
+  const t0 = h.clock.now();
+  let n = 0;
+  const r = sheetLock(h, 'lk_A', () => { n++; return 'ran'; }, BUSY);
+  ok(r === 'BUSY', 'onBusy の戻り値が返る');
+  ok(n === 0, 'fn は呼ばれない');
+  const waited = h.clock.now() - t0;
+  ok(waited >= 30000 && waited < 31000, '30秒待ってあきらめる(' + waited + 'ms)');
+  ok(cache.get('lk_A') === 'someone-else', '他の端末の札には触らない');
+  ok(h.calls.flush === 0, '書いていないので flush しない');
+});
+test('lock_not_removed_if_not_owner', () => {
+  const h = harness.build({});
+  const cache = h.ctx.CacheService.getScriptCache();
+  sheetLock(h, 'lk_A', () => { cache.put('lk_A', 'other-token', 30); }, BUSY);   // fn が長引いて札が切れ、他の端末が立てた想定
+  ok(cache.get('lk_A') === 'other-token', '自分の印でない札は消さない');
+  ok(h.calls.flush === 1, 'flush は呼ぶ');
+});
+test('lock_releases_on_throw', () => {
+  const h = harness.build({});
+  const cache = h.ctx.CacheService.getScriptCache();
+  let err = null;
+  try { sheetLock(h, 'lk_A', () => { throw new Error('boom'); }, BUSY); } catch (e) { err = e; }
+  ok(err && err.message === 'boom', '例外は外へ出る');
+  ok(cache.get('lk_A') === null, '例外でも札は消える');
+  ok(h.calls.flush === 1, '例外でも flush する');
+  ok(!h.ctx.LockService.getScriptLock().hasLock(), 'ScriptLock は離している');
+  const t0 = h.clock.now();   // 札が消えたので次の人はすぐ走れる
+  ok(sheetLock(h, 'lk_A', () => 'next', BUSY) === 'next' && h.clock.now() === t0, '次の端末は待たずに走る');
+});
+test('different_sheets_do_not_wait', () => {
+  const h = harness.build({});
+  const cache = h.ctx.CacheService.getScriptCache();
+  cache.put('lk_A', 'someone-else', 60);
+  const t0 = h.clock.now();
+  const r = sheetLock(h, 'lk_B', () => 'ran', BUSY);
+  ok(r === 'ran', '別のシートは走る');
+  ok(h.clock.now() === t0 && h.calls.sleep === 0, '待たない(時計が進んでいない)');
+  ok(cache.get('lk_A') === 'someone-else', 'lk_A の札はそのまま');
+  ok(sheetLock(h, 'lk_ledger', () => 'ledger', BUSY) === 'ledger' && h.clock.now() === t0, 'lk_ledger も別の札');
+});
+test('lock_scriptlock_contended_gives_up', () => {
+  // ScriptLock が取れないままなら札を立てられず、30秒であきらめる(fn は呼ばない)
+  const h = harness.build({});
+  h.lockBusy = true;
+  let n = 0;
+  const r = sheetLock(h, 'lk_A', () => { n++; return 'ran'; }, BUSY);
+  ok(r === 'BUSY' && n === 0, 'ScriptLock が取れないままなら onBusy');
+  ok(h.ctx.CacheService.getScriptCache().get('lk_A') === null, '札は立てていない');
+});
+
 for (const [name, fn] of tests) {
   try { fn(); } catch (e) { ok(false, name + ' が例外: ' + (e && e.stack || e)); }
 }

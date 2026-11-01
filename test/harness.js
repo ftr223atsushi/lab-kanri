@@ -196,6 +196,7 @@ function build(opts) {
     Utilities: {
       formatDate: (d, tz, f) => jst(d, f),
       sleep(ms) { calls.sleep++; clock.advance(ms); },
+      getUuid: () => require('crypto').randomUUID(),   // 順番待ちの札の印に使う
       // Code_v2.gs のパスワード処理が使う。node の crypto で SHA-256 を模擬（符号つきバイト配列で返す）
       DigestAlgorithm: { SHA_256: 'SHA_256' }, Charset: { UTF_8: 'UTF_8' },
       computeDigest: (alg, str) => Array.from(require('crypto').createHash('sha256').update(String(str), 'utf8').digest()).map(b => b > 127 ? b - 256 : b)
