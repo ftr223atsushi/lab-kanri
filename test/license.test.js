@@ -1312,7 +1312,11 @@ test('pass_token_not_put_from_snapshot', () => {
   ok(gpost(h, REQ({ action: 'getWorkerList' })).ok === true && passKeys(h).length === 0, '非シート action も写しでは置かない');
   zeroCalls(h);
   gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' }));
-  ok(h.calls.openById >= 1, '次も4段の判定（台帳を読みに行く）(' + h.calls.openById + ')');
+  // 最終レビュー修正: 開けなかった覚え(60秒)の間は台帳を開きに行かず写しを読む。札で素通りはしない
+  ok(h.calls.propGet >= 1 && h.calls.cacheGet > 1, '次も4段の判定（写しを読む）(' + JSON.stringify(h.calls) + ')');
+  h.clock.advance(61 * 1000); zeroCalls(h);
+  gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' }));
+  ok(h.calls.openById >= 1, '覚えが切れたら台帳を読みに行く(' + h.calls.openById + ')');
 });
 test('pass_token_scoped_to_sheet_and_device', () => {
   const h = gateEnv();
@@ -1439,6 +1443,166 @@ test('prephase_append_calls_sheet_lock_and_serializes', () => {
   ok(b.ok === true && zenCodes(h).filter(c => c === 'TEDC-L-0004').length === 1, '札の中で探し直して同じコードの行を二重に作らない(' + zenCodes(h) + ')');
   const r4 = zenTab(h).rows.find(r => r[0] === 'TEDC-L-0004');
   ok(r4[3] instanceof Date && r4[4] === '田中', '他の端末が足した行に記録する');
+});
+
+// ---- 最終レビュー修正 I1：台帳が止まっている間の「知っている端末」・開けない覚え（60秒）----
+const DEVMARK = (key, dev) => 'LK_DEV_' + key + '_' + dev;
+test('known_device_mark_written_after_register', () => {
+  const h = gateEnv();
+  ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' })).ok === true, '登録して通る');
+  const v = h.props.get(DEVMARK(K1, 'DEV1'));
+  ok(v != null, '知っている端末の印がプロパティに残る(' + [...h.props.keys()] + ')');
+  const o = v ? JSON.parse(v) : {};
+  ok(o.f === h.clock.now() && o.l === h.clock.now(), '印は初回・最後に通った時刻(' + v + ')');
+  ok(Buffer.byteLength(DEVMARK(K1, 'DEV1') + v, 'utf8') < 200, '印は小さい');
+  const t0 = h.clock.now();
+  h.clock.advance(3601 * 1000);   // 間引きが切れて最終利用を書き直す
+  ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' })).ok === true, '1時間後も通る');
+  const o2 = JSON.parse(h.props.get(DEVMARK(K1, 'DEV1')));
+  ok(o2.f === t0 && o2.l === h.clock.now(), '書き直しで最後の時刻だけ進む(' + JSON.stringify(o2) + ')');
+});
+test('ledger_outage_known_device_passes_after_2h', () => {
+  const h = gateEnv();
+  ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' })).ok === true, '台帳が読めるうちに登録（写しも残る）');
+  ok(gpost(h, REQ({ action: 'getWorkerList' })).ok === true, '非シート action も通る');
+  const rows = usageTab(h).rows.length;
+  h.failOpen.add(LEDGER_ID);
+  h.clock.advance(2 * 3600 * 1000);   // 台帳キャッシュ・通過札・間引き(1時間)はすべて切れている。写しは2時間前で使える
+  for (const a of ['handleScan', 'getWorkerList', 'getKentaiData']) {
+    const r = gpost(h, REQ({ action: a, spreadsheetId: 'SIN' }));
+    ok(r.ok === true, '台帳が止まって2時間後も知っている端末の ' + a + ' は通る(' + JSON.stringify(r) + ')');
+  }
+  ok(h.ran.join() === 'handleScan,getWorkerList,handleScan,getWorkerList,getKentaiData', '処理が走る(' + h.ran + ')');
+  const c = gpost(h, REQ({ action: 'checkLicense' }));
+  ok(c.ok === true && c.used === null && c.limit === 5 && c.companyName === 'HSSエンジニヤリング', 'checkLicense も通る・used は null(' + JSON.stringify(c) + ')');
+  h.failOpen.delete(LEDGER_ID);
+  ok(usageTab(h).rows.length === rows, '止まっている間に行は足さない');
+  // 写しが24時間を超えたら、知っている端末でも止める（キーの確かめができない）
+  h.failOpen.add(LEDGER_ID);
+  h.clock.advance(23 * 3600 * 1000);
+  const r = gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' }));
+  ok(r.ok === false && r.reason === 'ledger_unavailable', '写しが25時間前なら断る(' + JSON.stringify(r) + ')');
+});
+test('ledger_outage_known_device_but_suspended_in_snapshot_refused', () => {
+  const h = gateEnv();
+  ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' })).ok === true, '登録');
+  h.books[LEDGER_ID].sheets.find(s => s.name === 'lab-kanri').rows[1][3] = '停止';
+  h.clock.advance(301 * 1000);
+  ok(gpost(h, REQ({ deviceId: 'DEV9', action: 'getWorkerList' })).reason === 'suspended', '停止を読む（写しも停止）');
+  h.failOpen.add(LEDGER_ID);
+  h.clock.advance(2 * 3600 * 1000);
+  const r = gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' }));
+  ok(r.ok === false && r.reason === 'suspended', '知っている端末でも写しで停止なら断る(' + JSON.stringify(r) + ')');
+});
+test('ledger_outage_new_device_refused', () => {
+  const h = gateEnv();
+  ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' })).ok === true, 'DEV1 を登録（写しも残る）');
+  h.failOpen.add(LEDGER_ID);
+  h.clock.advance(2 * 3600 * 1000);
+  for (const a of ['handleScan', 'getWorkerList', 'checkLicense']) {
+    const r = gpost(h, REQ({ deviceId: 'DEV2', action: a, spreadsheetId: 'SIN' }));
+    ok(r.ok === false && r.reason === 'ledger_unavailable' && r.message === EXPECTED_MSG.ledger_unavailable, '新しい端末の ' + a + ' は断る(' + JSON.stringify(r) + ')');
+  }
+  ok(h.ran.length === 1, '新しい端末の処理は走らない(' + h.ran + ')');
+  ok(!h.props.has(DEVMARK(K1, 'DEV2')), '新しい端末の印は作らない');
+  // 同じ端末IDでも別のキーの印では通らない
+  h.props.set(DEVMARK(K2, 'DEV3'), JSON.stringify({ f: 1, l: 1 }));
+  const r2 = gpost(h, REQ({ deviceId: 'DEV3', action: 'getWorkerList' }));
+  ok(r2.ok === false && r2.reason === 'ledger_unavailable', '別のキーの印では通らない(' + JSON.stringify(r2) + ')');
+  h.failOpen.delete(LEDGER_ID);
+  ok(usageTab(h).rows.length === 2, '行は DEV1 の1行だけ');
+});
+test('known_device_mark_removed_when_refused_too_many', () => {
+  const h = gateEnv({ ledger: {} });
+  usageTab(h) || gpost(h, REQ({ action: 'getWorkerList' }));   // 利用タブを作る（DEV1）
+  // 田中が DEV1 の行を消して上限を1にした → 別端末 DEV2 が枠を取る → DEV1 は too_many。古い印は消える
+  const u = usageTab(h);
+  u.rows.splice(1, 1);
+  h.books[LEDGER_ID].sheets.find(s => s.name === 'lab-kanri').rows[1][5] = '1';
+  h.clock.advance(3601 * 1000);
+  ok(gpost(h, REQ({ deviceId: 'DEV2', action: 'getWorkerList' })).ok === true, 'DEV2 が枠を取る');
+  const r = gpost(h, REQ({ action: 'getWorkerList' }));
+  ok(r.ok === false && r.reason === 'too_many', 'DEV1 は台数超え(' + JSON.stringify(r) + ')');
+  ok(!h.props.has(DEVMARK(K1, 'DEV1')), '断った端末の古い印は消す');
+  h.failOpen.add(LEDGER_ID);
+  h.clock.advance(3601 * 1000);
+  ok(gpost(h, REQ({ action: 'getWorkerList' })).reason === 'ledger_unavailable', '台帳が止まっても消した端末は通らない');
+});
+test('ledger_failure_memo_skips_open_for_60s', () => {
+  const h = gateEnv();
+  ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' })).ok === true, '登録（写し・印が残る）');
+  h.failOpen.add(LEDGER_ID);
+  h.clock.advance(2 * 3600 * 1000);
+  zeroCalls(h);
+  ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' })).ok === true, '止まって最初の1回：知っている端末は通る');
+  ok(h.calls.openById === 1, '最初の1回で台帳を開こうとするのは1回だけ（利用タブでは開き直さない）(' + h.calls.openById + ')');
+  for (let i = 0; i < 3; i++) {
+    h.clock.advance(15 * 1000);
+    zeroCalls(h);
+    ok(gpost(h, REQ({ action: i === 1 ? 'getWorkerList' : 'handleScan', spreadsheetId: 'SIN' })).ok === true, '60秒の間も通る');
+    ok(h.calls.openById === 0, (15 * (i + 1)) + '秒後は台帳を開きに行かない(' + h.calls.openById + ')');
+  }
+  ok(gpost(h, REQ({ deviceId: 'DEV2', action: 'getWorkerList' })).reason === 'ledger_unavailable' && h.calls.openById === 0, '新しい端末も開きに行かずに断る');
+  h.clock.advance(16 * 1000);   // 最初の失敗から61秒
+  zeroCalls(h);
+  ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' })).ok === true, '61秒後も通る');
+  ok(h.calls.openById === 1, '61秒後はもう一度だけ開いてみる(' + h.calls.openById + ')');
+  // 台帳が戻ったら、覚えが切れた後の最初の呼び出しで普通に戻る
+  h.failOpen.delete(LEDGER_ID);
+  h.clock.advance(61 * 1000);
+  zeroCalls(h);
+  const rows = usageTab(h).rows.length;
+  ok(gpost(h, REQ({ deviceId: 'DEV2', action: 'getWorkerList' })).ok === true && h.calls.openById >= 1, '戻ったら新しい端末も登録できる');
+  ok(usageTab(h).rows.length === rows + 1, 'DEV2 の行が足される');
+});
+test('ledger_ok_but_usage_tab_unreadable_known_device_passes', () => {
+  // 台帳はキャッシュ（5分以内）で読めていて、利用タブを開くときに初めて失敗した
+  const h = gateEnv();
+  ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' })).ok === true, '登録');
+  h.clock.advance(3601 * 1000);
+  gpost(h, REQ({ deviceId: 'DEV9', action: 'getWorkerList' }));   // 台帳キャッシュを温める（DEV9 も登録される）
+  for (const k of passKeys(h)) h.cache.delete(k);
+  h.failOpen.add(LEDGER_ID);
+  zeroCalls(h);
+  ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' })).ok === true, '知っている端末は通る');
+  ok(h.calls.openById === 1, '利用タブで1回失敗しただけ(' + h.calls.openById + ')');
+  ok(gpost(h, REQ({ deviceId: 'DEV5', action: 'getWorkerList' })).reason === 'ledger_unavailable', '新しい端末は断る');
+});
+
+test('write_failure_inside_lock_known_passes_new_refused', () => {
+  const h = useBook([]);
+  ok(touch(h, mkEntry(5), 'dev1').ok === true, 'dev1 を登録');
+  h.clock.advance(3601 * 1000);
+  const orig = h.ctx.license_withSheetLock_;
+  h.ctx.license_withSheetLock_ = () => { throw new Error('書き込み失敗(模擬)'); };
+  const r = touch(h, mkEntry(5), 'dev1');
+  ok(r.ok === true && r.used === 1, '既にある端末は書けなくても通す(' + JSON.stringify(r) + ')');
+  const r2 = touch(h, mkEntry(5), 'dev2');
+  ok(r2.ok === false && r2.reason === 'ledger_unavailable', '新しい端末は断る(' + JSON.stringify(r2) + ')');
+  h.ctx.license_withSheetLock_ = orig;
+  ok(useRows(h).length === 2, '行は dev1 だけ');
+});
+
+// ---- 最終レビュー修正 M2：doPostAction_ の action はどれも入口の判定の表に入っている ----
+test('every_action_is_gated_exactly_once', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'Code_v2.gs'), 'utf8');
+  const start = src.indexOf('function doPostAction_(');
+  ok(start >= 0, 'doPostAction_ がある');
+  const end = src.indexOf('\nfunction ', start + 1);
+  const body = src.slice(start, end < 0 ? undefined : end);
+  const actions = [...body.matchAll(/case\s+'([^']+)'\s*:/g)].map(m => m[1]);
+  ok(actions.length >= 18, 'case を読み取れた(' + actions.length + ')');
+  const h = harness.build({});
+  const SHEET = h.eval('LICENSE_SHEET_ACTIONS_'), PLAIN = h.eval('LICENSE_PLAIN_ACTIONS_'), WRITE = h.eval('LICENSE_WRITE_ACTIONS_');
+  const SELF = { ping: true, checkLicense: true, listSites: true };
+  const own = (t, a) => Object.prototype.hasOwnProperty.call(t, a) && t[a] === true;
+  for (const a of actions) {
+    const n = [SHEET, PLAIN, SELF].filter(t => own(t, a)).length;
+    ok(n === 1, 'action「' + a + '」はちょうど1つの表に入る（' + n + '）');
+  }
+  for (const a of Object.keys(SHEET).concat(Object.keys(PLAIN))) ok(actions.includes(a), '表の「' + a + '」は doPostAction_ にある');
+  for (const a of Object.keys(WRITE)) ok(own(SHEET, a), '行を足す「' + a + '」はシートの action でもある');
+  for (const a of Object.keys(SELF)) ok(!own(SHEET, a) && !own(PLAIN, a), a + ' は判定の表に入れない');
 });
 
 for (const [name, fn] of tests) {

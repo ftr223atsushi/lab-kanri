@@ -29,6 +29,17 @@ const LICENSE_CACHE_SEC_ = 300;                                 // 台帳は5分
 const LICENSE_SNAPSHOT_PROP_ = 'LK_LEDGER_SNAPSHOT';            // 台帳の写し（スクリプトのプロパティ）
 const LICENSE_SNAPSHOT_MAX_MS_ = 24 * 3600 * 1000;              // 写しは24時間まで使う
 const LICENSE_DEFAULT_LIMIT_ = 5;                               // 台数上限が空のとき
+const LICENSE_DOWN_CK_ = 'lk_ledger_down';                      // 台帳を開けなかった覚え（CacheService）
+const LICENSE_DOWN_SEC_ = 60;                                   // 覚えは60秒。その間は台帳を開きに行かず写しで判定する
+
+// 台帳を開けなかった覚え（SPEC 3-3）。止まっている間、1回の呼び出しごとに openById を2回（台帳・利用タブ）試して
+// 毎回待たされないよう、失敗したら60秒は開きに行かない。読み書きの失敗は「覚え無し」として扱う
+function license_ledgerDown_() {
+  try { return !!CacheService.getScriptCache().get(LICENSE_DOWN_CK_); } catch (e) { return false; }
+}
+function license_setLedgerDown_() {
+  try { CacheService.getScriptCache().put(LICENSE_DOWN_CK_, '1', LICENSE_DOWN_SEC_); } catch (e) { Logger.log('開けない覚えを置けず: ' + e); }
+}
 
 // 入力ゆれをそろえる：大文字・空白とハイフンを除く→ LAB＋8文字(許す文字だけ)なら LAB-XXXX-XXXX、違えば ''
 function license_normalizeKey_(s) {
@@ -120,7 +131,7 @@ function license_readLedger_(now) {
   return { keys: keys, drives: drives, graceUntil: graceUntil, readAt: now, fromSnapshot: false };
 }
 
-// 台帳を返す。5分キャッシュ→台帳→(読めなければ)24時間以内の写し→null。
+// 台帳を返す。5分キャッシュ→台帳→(読めなければ・60秒以内に開けなかったなら)24時間以内の写し→null。
 // v3.35: 写しは本物の 9KB/値 の上限に収まる最小限の項目だけにする。保存に失敗しても読み取りは成功とする
 function license_ledger_(now) {
   const cache = CacheService.getScriptCache();
@@ -128,23 +139,27 @@ function license_ledger_(now) {
   if (hit) {
     try { const l = JSON.parse(hit); l.fromSnapshot = false; return l; } catch (e) { /* 壊れていれば読み直す */ }
   }
-  try {
-    const led = license_readLedger_(now);
-    const json = JSON.stringify({ keys: led.keys, drives: led.drives, graceUntil: led.graceUntil, readAt: led.readAt });
-    try { cache.put(LICENSE_CACHE_KEY_, json, LICENSE_CACHE_SEC_); } catch (e) { Logger.log('台帳キャッシュ保存失敗: ' + e); }
-    try { PropertiesService.getScriptProperties().setProperty(LICENSE_SNAPSHOT_PROP_, json); } catch (e) { Logger.log('台帳の写し保存失敗: ' + e); }
-    return led;
-  } catch (e) {
-    Logger.log('台帳を読めない: ' + e);
+  // 最終レビュー修正: 60秒以内に開けなかったなら開きに行かず、すぐ写しへ
+  if (!license_ledgerDown_()) {
     try {
-      const snap = JSON.parse(PropertiesService.getScriptProperties().getProperty(LICENSE_SNAPSHOT_PROP_) || 'null');
-      if (snap && typeof snap.readAt === 'number' && now - snap.readAt <= LICENSE_SNAPSHOT_MAX_MS_ && snap.keys) {
-        snap.fromSnapshot = true;
-        return snap;
-      }
-    } catch (e2) { /* 写しが壊れていれば使わない */ }
-    return null;
+      const led = license_readLedger_(now);
+      const json = JSON.stringify({ keys: led.keys, drives: led.drives, graceUntil: led.graceUntil, readAt: led.readAt });
+      try { cache.put(LICENSE_CACHE_KEY_, json, LICENSE_CACHE_SEC_); } catch (e) { Logger.log('台帳キャッシュ保存失敗: ' + e); }
+      try { PropertiesService.getScriptProperties().setProperty(LICENSE_SNAPSHOT_PROP_, json); } catch (e) { Logger.log('台帳の写し保存失敗: ' + e); }
+      return led;
+    } catch (e) {
+      Logger.log('台帳を読めない: ' + e);
+      license_setLedgerDown_();
+    }
   }
+  try {
+    const snap = JSON.parse(PropertiesService.getScriptProperties().getProperty(LICENSE_SNAPSHOT_PROP_) || 'null');
+    if (snap && typeof snap.readAt === 'number' && now - snap.readAt <= LICENSE_SNAPSHOT_MAX_MS_ && snap.keys) {
+      snap.fromSnapshot = true;
+      return snap;
+    }
+  } catch (e2) { /* 写しが壊れていれば使わない */ }
+  return null;
 }
 
 // 猶予中か。猶予期限の日の終わり(日本時間)まで猶予中。行が無い・空・読めない＝猶予中(daysLeft は null)。
@@ -232,6 +247,34 @@ function license_releaseFlag_(cache, lock, lockKey, token) {
 const LICENSE_USE_TAB_ = 'lab-kanri利用';
 const LICENSE_USE_HEADER_ = ['キー', '会社名', '端末ID', '端末名（機種）', '初回利用', '最終利用', '利用回数', '版', '最終判定', '呼び名'];
 const LICENSE_TOUCH_SEC_ = 3600;   // 書き直しは1台1時間に1回
+const LICENSE_DEV_PROP_PREFIX_ = 'LK_DEV_';   // 知っている端末の印（スクリプトのプロパティ）LK_DEV_<キー>_<端末ID>
+const LICENSE_DEV_ID_MAX_ = 200;              // これより長い端末IDには印を付けない（プロパティの名前を長くしない）
+
+// 知っている端末の印（SPEC 3-3）。利用タブで行を確かめた・足した端末に付け、台帳が開けない間だけ使う。
+// 値は {f: 初めて付けた時刻, l: 最後に確かめた時刻}（epoch ms・約40バイト）。1台1つ・書くのは1時間に1回（間引きと同じ）。
+// CacheService（最長6時間・追い出しあり）ではなくプロパティにするのは、写しを使う24時間ずっと残したいから。
+// 印が増えるのは台数上限の内側で登録できた端末だけ（数十台で数KB。プロパティ全体の上限 500KB に遠い）
+function license_devProp_(key, deviceId) { return LICENSE_DEV_PROP_PREFIX_ + key + '_' + deviceId; }
+function license_markKnown_(key, deviceId, now) {
+  if (!key || !deviceId || deviceId.length > LICENSE_DEV_ID_MAX_) return;
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const name = license_devProp_(key, deviceId);
+    let first = now;
+    try { const o = JSON.parse(props.getProperty(name) || 'null'); if (o && typeof o.f === 'number') first = o.f; } catch (e) { /* 壊れていれば付け直す */ }
+    props.setProperty(name, JSON.stringify({ f: first, l: now }));
+  } catch (e) { Logger.log('知っている端末の印を付けられず: ' + e); }
+}
+function license_isKnown_(key, deviceId) {
+  if (!key || !deviceId || deviceId.length > LICENSE_DEV_ID_MAX_) return false;
+  try { return !!PropertiesService.getScriptProperties().getProperty(license_devProp_(key, deviceId)); }
+  catch (e) { Logger.log('知っている端末の印を読めず: ' + e); return false; }
+}
+function license_forgetKnown_(key, deviceId) {
+  if (!key || !deviceId || deviceId.length > LICENSE_DEV_ID_MAX_) return;
+  try { PropertiesService.getScriptProperties().deleteProperty(license_devProp_(key, deviceId)); }
+  catch (e) { Logger.log('知っている端末の印を消せず: ' + e); }
+}
 
 // 利用タブの全行を見出し名で引いて調べる。tab が null（まだ無い）なら空として返す。
 // 返す: { c(列名)→0始まり列番号, values, found(行の添字 or -1), used(そのキーの行数) }
@@ -255,6 +298,8 @@ function license_useScan_(tab, key, deviceId) {
 // - 既にある端末は常に通す（上限を下げられていても）。新しい端末は limit===0（無制限）か used<limit のとき行を足す
 // - 同じ端末は1時間に1回しか書かない（CacheService）。間引き中は台帳を開かずに返す
 // - 書くのは台帳の札（lk_ledger）の中だけ。新しい端末は札の中で数え直す（最後の1枠を2台が取り合っても1台だけ）
+// - 台帳を開けない（または60秒以内に開けなかった）とき：知っている端末の印があれば {ok:true, used:null, limit} で通す。
+//   印が無ければ ledger_unavailable。この道では行を足さない・数えない（台数の上限は守られる）
 function license_touchDevice_(key, entry, deviceId, deviceName, appVersion, verdict, now) {
   key = license_normalizeKey_(key) || String(key == null ? '' : key).trim();   // 照合も間引き札も同じ形で
   deviceId = String(deviceId == null ? '' : deviceId).trim();   // 前後の空白で別端末にならないように
@@ -269,13 +314,25 @@ function license_touchDevice_(key, entry, deviceId, deviceName, appVersion, verd
   const unavailable = () => fail('ledger_unavailable');
   const stamp = Utilities.formatDate(new Date(now), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm');
 
+  // 台帳が開けない間：知っている端末だけ通す。読めないのに行を足さない（台数の数え違いを防ぐ）
+  const knownOrUnavailable = () => license_isKnown_(key, deviceId) ? { ok: true, used: null, limit: limit } : unavailable();
+  if (license_ledgerDown_()) return knownOrUnavailable();
+
   // 札の外で先に一度見て、既にある端末か新しい端末かを決める（札が取れなかったときの扱いが違うため）
   let pre;
+  let book;
   try {
-    pre = license_useScan_(SpreadsheetApp.openById(LICENSE_LEDGER_ID).getSheetByName(LICENSE_USE_TAB_), key, deviceId);
+    book = SpreadsheetApp.openById(LICENSE_LEDGER_ID);
+  } catch (e) {
+    Logger.log('台帳を開けない(利用タブ): ' + e);
+    license_setLedgerDown_();
+    return knownOrUnavailable();
+  }
+  try {
+    pre = license_useScan_(book.getSheetByName(LICENSE_USE_TAB_), key, deviceId);
   } catch (e) {
     Logger.log('利用タブを読めない: ' + e);
-    return unavailable();   // 読めないのに行を足さない（台数の数え違いを防ぐ）
+    return knownOrUnavailable();
   }
   const isNew = pre.found < 0;
 
@@ -333,11 +390,16 @@ function license_touchDevice_(key, entry, deviceId, deviceName, appVersion, verd
     }, () => isNew ? fail('busy') : { ok: true, used: pre.used, limit: limit });   // 既にある端末は書けなくても通す（最終利用が古いだけ）
   } catch (e) {
     Logger.log('利用タブへの書き込み失敗: ' + e);
-    return unavailable();
+    // 既にある端末は札の外で行を確かめてあるので通す（最終利用が古いだけ・混み合いと同じ扱い）。新しい端末は足せていないので断る
+    if (isNew) return unavailable();
+    res = { ok: true, used: pre.used, limit: limit };
   }
   if (res.ok && wrote) {
     try { cache.put(ckey, JSON.stringify({ used: res.used, limit: res.limit }), LICENSE_TOUCH_SEC_); } catch (e) { Logger.log('間引きの札を置けず: ' + e); }
   }
+  // 利用タブに行があると確かめた（足した）端末だけ印を付ける。新しい端末を断ったら古い印は消す（田中が行を消した端末など）
+  if (res.ok) license_markKnown_(key, deviceId, now);
+  else if (isNew) license_forgetKnown_(key, deviceId);
   return res;
 }
 
