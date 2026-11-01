@@ -426,9 +426,11 @@ const LICENSE_SHEET_ACTIONS_ = {
   getDailyReportData: true, listDailyReportDates: true, getKentaiData: true, getSaishuAll: true,
   getLabelSiteName: true, setLabelSiteName: true, getLabelPrinted: true, markCodeLabelPrinted: true
 };
-// シートに書く action（シートごとの順番待ち lk_<シートID> を通す）
+// シートに行を足す action（シートごとの順番待ち lk_<シートID> を丸ごと通す）
+// v3.35 Task 12d: handleScan は外した。スキャンは見つけた行のセルに書くだけで、同じコードを2台が同時に読んでも
+// 後の端末が残るだけ（無害と確認済み）。handleScan の中で行を足す前処理シートの追加だけ、その場で札を取る（handlePhase2V2）
 const LICENSE_WRITE_ACTIONS_ = {
-  handleScan: true, savePickupExtra: true, undoRecord: true, markCodeLabelPrinted: true
+  savePickupExtra: true, undoRecord: true, markCodeLabelPrinted: true
 };
 // シートを使わない action（キーの確認だけ）
 const LICENSE_PLAIN_ACTIONS_ = {
@@ -442,8 +444,42 @@ function license_refuse_(reason, message) {
   return { ok: false, reason: reason, message: message || LICENSE_MSG_[reason] };
 }
 
+// ---- 通過札（v3.35 Task 12d・案A）----
+// キー・端末（・シート）の判定が全部通ったら札を1枚置き、次からは get 1回で通す（台帳・利用タブ・Drive を見ない）。
+// 札の名前：シートの action は lk_pass_<キー>_<端末ID>_<シートID>、シートを使わない action は lk_pass_<キー>_<端末ID>。
+// 寿命は「台帳を読んだ時刻(readAt)＋300秒」まで（台帳キャッシュの残り）。停止・期限切れは今と同じく最長5分で効く。
+// 写し(fromSnapshot)で判定した回は置かない。listSites（現場切替のときだけ）・checkLicense・キー無し(猶予)は札を使わない
+const LICENSE_PASS_PREFIX_ = 'lk_pass_';
+function license_passKey_(key, deviceId, sheetId) {
+  return (LICENSE_PASS_PREFIX_ + key + '_' + deviceId + (sheetId ? '_' + sheetId : '')).slice(0, 250);   // キーは250字まで
+}
+// 札があり、中身（キー・端末・シート）が要求と同じで、readAt＋300秒より前なら中身を返す。それ以外・失敗は null（今の判定へ）
+function license_passGet_(key, deviceId, sheetId, now) {
+  try {
+    const hit = CacheService.getScriptCache().get(license_passKey_(key, deviceId, sheetId));
+    if (!hit) return null;
+    const v = JSON.parse(hit);
+    // 名前が衝突・切り詰めで重なっても他人の札で通らないよう中身でも確かめる。CacheService が長く残しても readAt で切る
+    if (!v || v.k !== key || v.d !== deviceId || v.s !== (sheetId || '') || typeof v.r !== 'number') return null;
+    if (!(now < v.r + LICENSE_CACHE_SEC_ * 1000)) return null;
+    return v;
+  } catch (e) {
+    Logger.log('通過札の読み込み失敗: ' + e);
+    return null;
+  }
+}
+// 判定が全部通ったあとに札を置く。寿命は切り捨てで readAt＋300秒を超えない。1秒未満なら置かない
+function license_passPut_(ledger, key, deviceId, sheetId, company, folderId, now) {
+  if (!ledger || ledger.fromSnapshot || typeof ledger.readAt !== 'number') return;
+  const ttl = Math.floor((ledger.readAt + LICENSE_CACHE_SEC_ * 1000 - now) / 1000);
+  if (ttl < 1) return;
+  const v = { k: key, d: deviceId, s: sheetId || '', c: company, f: folderId || '', r: ledger.readAt };
+  try { CacheService.getScriptCache().put(license_passKey_(key, deviceId, sheetId), JSON.stringify(v), Math.min(ttl, LICENSE_CACHE_SEC_)); }
+  catch (e) { Logger.log('通過札を置けず: ' + e); }
+}
+
 // 入口の判定。{allow:true, notice?, company?, folderId?, spreadsheetId?} | {allow:false, response}
-// 順番：キー無し→猶予 ／ キー→台帳→端末の登録→(シートの action だけ)置き場所。拒否は利用タブに書かない
+// 順番：キー無し→猶予 ／ (通過札があればここで通す) ／ キー→台帳→端末の登録→(シートの action だけ)置き場所。拒否は利用タブに書かない
 function license_gate_(action, p, now) {
   if (action === 'ping' || action === 'checkLicense') return { allow: true };   // ping は判定なし・checkLicense は自分で確かめる
   const isList = action === 'listSites';
@@ -461,20 +497,28 @@ function license_gate_(action, p, now) {
     return deny('no_key');
   }
 
+  // getSpreadsheetMeta は URL が来る。action と同じ読み方でIDを取る（I/O なし）
+  const id = isSheet ? parseSpreadsheetIdFromInput(p.spreadsheetId) : '';
+  // 通過札：キー・端末（シートの action はシートIDも）がそろっているときだけ見る。無ければ下の今の判定
+  const nkey = license_normalizeKey_(key);
+  if (!isList && nkey && deviceId && (!isSheet || id)) {
+    const pass = license_passGet_(nkey, deviceId, id, now);
+    if (pass) return isSheet ? { allow: true, company: pass.c, folderId: pass.f, spreadsheetId: id } : { allow: true, company: pass.c };
+  }
+
   const ledger = license_ledger_(now);
   if (!ledger) return deny('ledger_unavailable');
   const ck = license_checkKey_(ledger, key, deviceId, now);
   if (!ck.ok) return deny(ck.reason, ck.message);
 
-  let id = '';
-  if (isSheet) {
-    id = parseSpreadsheetIdFromInput(p.spreadsheetId);   // getSpreadsheetMeta は URL が来る。action と同じ読み方でIDを取る
-    if (!id) return deny('outside');
-  }
+  if (isSheet && !id) return deny('outside');
 
   const t = license_touchDevice_(ck.key, ck.entry, deviceId, String(p.deviceName || ''), String(p.appVersion || ''), '有効', now);
   if (!t.ok) return deny(t.reason, t.message);
-  if (!isSheet && !isList) return { allow: true, company: ck.entry.company };
+  if (!isSheet && !isList) {
+    license_passPut_(ledger, ck.key, deviceId, '', ck.entry.company, '', now);
+    return { allow: true, company: ck.entry.company };
+  }
 
   const driveId = ledger.drives && ledger.drives[ck.entry.conn];
   if (!driveId) return deny('no_folder');
@@ -483,6 +527,7 @@ function license_gate_(action, p, now) {
   if (isSheet) {
     const s = license_sheetAllowed_(id, f.folderId);
     if (!s.ok) return deny(s.reason, s.message);
+    license_passPut_(ledger, ck.key, deviceId, id, ck.entry.company, f.folderId, now);
   }
   return { allow: true, company: ck.entry.company, folderId: f.folderId, spreadsheetId: id };
 }

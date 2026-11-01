@@ -23,6 +23,7 @@ class Range {
   constructor(sh, r, c, nr, nc) { Object.assign(this, { sh, r, c, nr, nc }); }
   getValues() { const o = []; for (let i = 0; i < this.nr; i++) { const row = []; for (let j = 0; j < this.nc; j++) row.push(this.sh.get(this.r + i, this.c + j)); o.push(row); } return o; }
   getValue() { return this.sh.get(this.r, this.c); }
+  getDisplayValue() { return this.getDisplayValues()[0][0]; }
   getDisplayValues() { return this.getValues().map(r => r.map(v => v === '' || v == null ? '' : String(v))); }
   setValue(v) { this.sh.set(this.r, this.c, v); return this; }
   setValues(m) { m.forEach((row, i) => row.forEach((v, j) => this.sh.set(this.r + i, this.c + j, v))); return this; }
@@ -39,7 +40,15 @@ class Sheet {
   set(r, c, v) { this.log.push(r + ',' + c); while (this.rows.length < r) this.rows.push([]); const row = this.rows[r - 1]; while (row.length < c) row.push(''); row[c - 1] = v; }
   getLastRow() { return this.rows.length; }
   getLastColumn() { return Math.max(0, ...this.rows.map(r => r.length)); }
-  getRange(r, c, nr = 1, nc = 1) { return new Range(this, r, c, nr, nc); }
+  getRange(r, c, nr = 1, nc = 1) {
+    if (typeof r === 'string') {   // 'B12' のような A1 表記（1セルだけ）
+      const m = r.match(/^([A-Z]+)(\d+)$/);
+      if (!m) throw new Error('Sheet 模擬: 解釈できない A1 表記: ' + r);
+      let col = 0; for (const ch of m[1]) col = col * 26 + (ch.charCodeAt(0) - 64);
+      return new Range(this, Number(m[2]), col, 1, 1);
+    }
+    return new Range(this, r, c, nr, nc);
+  }
   getDataRange() { return new Range(this, 1, 1, this.getLastRow(), this.getLastColumn()); }
   appendRow(a) { this.rows.push(a.slice()); return this; }
   deleteRows(r, n = 1) { this.rows.splice(r - 1, n); }

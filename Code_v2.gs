@@ -223,6 +223,8 @@ function getLabRecCols_(sheet) {
 /**
  * ラボ記録シートでコードの行を検索。無ければ末尾に追記 (コード/地点/種別を書く)。
  * @return {number} 行番号
+ * v3.35 Task 12d: 今は呼ばれない (handleScan の labSheet は常に null)。復活させるときは行を足す部分を
+ * license_withSheetLock_('lk_'+シートID, …) で囲うこと (handleScan は順番待ちをしないため)。
  */
 function findOrAppendLabRow_(sheet, cols, baseCode, point, kindLabel) {
   const target = String(baseCode).trim().toUpperCase();
@@ -413,8 +415,9 @@ function doGet() {
 // 複数台で同じシートに同時に書くと、①同じコードを2台がほぼ同時に読むと両方が「まだ空」と見て二重に書く
 // ②ラベル印刷の控えは末尾に行を足すので、同時だと片方が上書きされる、が起きうる。
 // 待つのは前の書き込みが終わるまで (普通は1秒未満)。読むだけの処理 (表示・日報) は待たせない。
-// v3.35: シートに書く4種 (handleScan など) はシートごとの順番待ち license_withSheetLock_ に移した (License.gs)。
-// ここに残すのはスクリプトのプロパティに書く2種だけ (入れ子にしないため、4種はここに置かない)。
+// v3.35: シートに行を足す3種 (savePickupExtra・undoRecord・markCodeLabelPrinted) はシートごとの順番待ち
+// license_withSheetLock_ に移した (License.gs)。handleScan は順番待ちなし (行を足す前処理の追加だけ handlePhase2V2 で札を取る)。
+// ここに残すのはスクリプトのプロパティに書く2種だけ (入れ子にしないため、3種と handleScan はここに置かない)。
 const WRITE_ACTIONS_ = {
   setLabelSiteName: true, addWorker: true
 };
@@ -467,7 +470,8 @@ function doPost(e) {
       }
       return respond({ ok: true, company: gate.company, sites: sites });
     }
-    // 書き込み4種：シートごとの順番待ち (札のキー lk_<シートID>)。ScriptLock の withWriteLock_ とは重ねない
+    // 行を足す書き込み3種：シートごとの順番待ち (札のキー lk_<シートID>)。ScriptLock の withWriteLock_ とは重ねない
+    // v3.35 Task 12d: handleScan はここを通らない (順番待ちなしで doPostAction_ へ)
     if (license_has_(LICENSE_WRITE_ACTIONS_, action)) {
       const sid = parseSpreadsheetIdFromInput(p.spreadsheetId);
       if (sid) {
@@ -1598,6 +1602,18 @@ function handlePhase2Kentai_(ss, info, mode, cfg, parsed, worker, force, autoSwi
   };
 }
 
+// 前処理シートで Lコードの行番号を返す (無ければ -1)
+function findZenshoriRow_(sheet, baseCode) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return -1;
+  const codes = sheet.getRange(2, COL_ZENSHORI.CODE, lastRow - 1, 1).getDisplayValues();
+  const target = String(baseCode).toUpperCase();
+  for (let i = 0; i < codes.length; i++) {
+    if (String(codes[i][0]).trim().toUpperCase() === target) return i + 2;
+  }
+  return -1;
+}
+
 function handlePhase2V2(ss, mode, cfg, parsed, worker, force, autoSwitched) {
   // v2.58: 同じ処理が2か所にあったので lookupKentaiByLCode_ に寄せた (見出し式)
   const kentaiInfo = lookupKentaiByLCode_(ss, parsed.baseCode);
@@ -1611,30 +1627,32 @@ function handlePhase2V2(ss, mode, cfg, parsed, worker, force, autoSwitched) {
     return handlePhase2Kentai_(ss, kentaiInfo, mode, cfg, parsed, worker, force, autoSwitched);
   }
 
-  // 前処理シート (無ければ作成)
+  // 前処理シートで Lコードの行を探す (無ければ作成・追加)。
+  // v3.35 Task 12d: handleScan は順番待ちをしないので、行を足す (シートを作る) ときだけシートの札 lk_<シートID> を取り、
+  // 札の中でもう一度探してから足す (2台が同時に別のコードを足しても行が重ならない)。既にある行なら札は取らない
   let sheet = ss.getSheetByName(SHEET_ZENSHORI);
-  if (!sheet) {
-    sheet = ss.insertSheet(SHEET_ZENSHORI);
-    sheet.getRange(1, 1, 1, ZENSHORI_HEADER.length).setValues([ZENSHORI_HEADER]);
-    sheet.getRange(1, 1, 1, ZENSHORI_HEADER.length).setFontWeight('bold');
-    sheet.setFrozenRows(1);
-  }
-
-  // Lコードで行検索 (無ければ追加)
-  const lastRow = sheet.getLastRow();
-  let foundRow = -1;
-  if (lastRow >= 2) {
-    const codes = sheet.getRange(2, COL_ZENSHORI.CODE, lastRow - 1, 1).getDisplayValues();
-    const target = parsed.baseCode.toUpperCase();
-    for (let i = 0; i < codes.length; i++) {
-      if (String(codes[i][0]).trim().toUpperCase() === target) { foundRow = i + 2; break; }
-    }
-  }
+  let foundRow = sheet ? findZenshoriRow_(sheet, parsed.baseCode) : -1;
   if (foundRow < 0) {
-    foundRow = Math.max(sheet.getLastRow(), 1) + 1;
-    sheet.getRange(foundRow, COL_ZENSHORI.CODE).setValue(parsed.baseCode);
-    if (kentaiPoint) sheet.getRange(foundRow, COL_ZENSHORI.POINT).setValue(kentaiPoint);
-    if (kentaiColor) sheet.getRange(foundRow, COL_ZENSHORI.COLOR).setValue(kentaiColor);
+    const got = license_withSheetLock_('lk_' + ss.getId(), function() {
+      let sh = ss.getSheetByName(SHEET_ZENSHORI);
+      if (!sh) {
+        sh = ss.insertSheet(SHEET_ZENSHORI);
+        sh.getRange(1, 1, 1, ZENSHORI_HEADER.length).setValues([ZENSHORI_HEADER]);
+        sh.getRange(1, 1, 1, ZENSHORI_HEADER.length).setFontWeight('bold');
+        sh.setFrozenRows(1);
+      }
+      let r = findZenshoriRow_(sh, parsed.baseCode);
+      if (r < 0) {
+        r = Math.max(sh.getLastRow(), 1) + 1;
+        sh.getRange(r, COL_ZENSHORI.CODE).setValue(parsed.baseCode);
+        if (kentaiPoint) sh.getRange(r, COL_ZENSHORI.POINT).setValue(kentaiPoint);
+        if (kentaiColor) sh.getRange(r, COL_ZENSHORI.COLOR).setValue(kentaiColor);
+      }
+      return { sheet: sh, row: r };
+    }, function() { return null; });
+    if (!got) return { ok: false, reason: 'busy', message: LICENSE_MSG_.busy };   // 何も書いていない
+    sheet = got.sheet;
+    foundRow = got.row;
   }
 
   const targetCol = COL_ZENSHORI[cfg.col];

@@ -1157,12 +1157,16 @@ test('write_action_uses_sheet_lock_not_script_lock', () => {
   h.ctx.markCodeLabelPrinted = (id) => { seen.markCodeLabelPrinted = h.cache.has('lk_' + h.ctx.parseSpreadsheetIdFromInput(id)); return { ok: true }; };
   h.ctx.setLabelSiteName = () => ({ ok: true });
   h.ctx.addWorker = () => ({ ok: true });
-  for (const a of ['handleScan', 'savePickupExtra', 'undoRecord', 'markCodeLabelPrinted']) {
+  for (const a of ['savePickupExtra', 'undoRecord', 'markCodeLabelPrinted']) {
     const r = gpost(h, REQ({ action: a, spreadsheetId: IN_URL }));
     ok(r.ok === true, a + ' は通る');
     ok(seen[a] === true, a + ': 実行中は lk_<シートID> の札が立っている');
   }
-  ok(wl === 0, '書き込み4種は withWriteLock_ を通らない(' + wl + ')');
+  // Task 12d（案D）：handleScan は札を取らない（行を足す前処理の追加だけがその場で札を取る）
+  const rs = gpost(h, REQ({ action: 'handleScan', spreadsheetId: IN_URL }));
+  ok(rs.ok === true && seen.handleScan === false, 'handleScan: 実行中に lk_<シートID> の札は立っていない(' + seen.handleScan + ')');
+  ok(wl === 0, '書き込み3種・handleScan は withWriteLock_ を通らない(' + wl + ')');
+  ok(h.eval('Object.keys(LICENSE_WRITE_ACTIONS_).sort().join()') === 'markCodeLabelPrinted,savePickupExtra,undoRecord', 'LICENSE_WRITE_ACTIONS_ は3件(handleScan を外した)');
   ok(!h.cache.has('lk_SIN'), '終わったら札は消える');
   gpost(h, REQ({ action: 'setLabelSiteName', spreadsheetId: 'SIN' }));
   gpost(h, REQ({ action: 'addWorker' }));
@@ -1171,13 +1175,17 @@ test('write_action_uses_sheet_lock_not_script_lock', () => {
 });
 test('busy_answer_shape', () => {
   const h = gateEnv({ real: true });
-  let ran = 0;
-  h.ctx.handleScan = () => { ran++; return { ok: true }; };
-  ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' })).ok === true, '登録のため1回通す');
+  let ran = 0, scans = 0;
+  h.ctx.savePickupExtra = () => { ran++; return { ok: true }; };
+  h.ctx.handleScan = () => { scans++; return { ok: true }; };
+  ok(gpost(h, REQ({ action: 'savePickupExtra', spreadsheetId: 'SIN' })).ok === true, '登録のため1回通す');
   h.lockBusy = true;
-  const r = gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' }));
+  const r = gpost(h, REQ({ action: 'savePickupExtra', spreadsheetId: 'SIN' }));
   ok(r.ok === false && r.message === EXPECTED_MSG.busy && r.reason === 'busy' && Object.keys(r).sort().join() === 'message,ok,reason', '混み合い時の応答は {ok:false, reason:busy, message}(' + JSON.stringify(r) + ')');
   ok(ran === 1, '混み合っていれば処理は走らない');
+  // Task 12d：handleScan は順番待ちをしないので、ScriptLock が混んでいても通る（通過札で判定も I/O なし）
+  const s = gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' }));
+  ok(s.ok === true && scans === 1, 'handleScan は混み合いでも待たずに通る(' + JSON.stringify(s) + ')');
 });
 
 
@@ -1213,6 +1221,225 @@ test('whitespace_device_id_refused_no_device', () => {
   ok(r2.ok === true && usageTab(h).rows[1][2] === 'DEV1', '前後の空白は取って登録');
 });
 
+
+// ---- Task 12d：通過札（案A）・スキャンは順番待ちなし（案D）----
+const zeroCalls = (h) => { for (const k of Object.keys(h.calls)) h.calls[k] = 0; };
+const passKeys = (h) => [...h.cache.keys()].filter(k => k.indexOf('lk_pass_') === 0);
+const PK = (key, dev, sid) => 'lk_pass_' + key + '_' + dev + (sid ? '_' + sid : '');
+const LEDGER_CK = 'lk_ledger_v1';
+
+test('pass_token_second_call_one_cache_get', () => {
+  const h = gateEnv();
+  ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' })).ok === true, '1回目は4段の判定で通る');
+  ok(h.cache.has(PK(K1, 'DEV1', 'SIN')), '1回目のあと通過札が置かれる(' + passKeys(h) + ')');
+  zeroCalls(h);
+  const r = gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' }));
+  ok(r.ok === true && h.ran.length === 2, '2回目も通る(' + JSON.stringify(r) + ')');
+  ok(h.calls.cacheGet === 1, '2回目はキャッシュの get 1回だけ(' + h.calls.cacheGet + ')');
+  ok(h.calls.openById === 0 && h.calls.driveGet === 0 && h.calls.driveList === 0 && h.calls.propGet === 0 && h.calls.cachePut === 0,
+    '2回目は台帳・Drive・プロパティに触らず札も置き直さない(' + JSON.stringify(h.calls) + ')');
+  ok(h.calls.tryLock === 0, 'ScriptLock も取らない');
+  zeroCalls(h);
+  ok(gpost(h, REQ({ licenseKey: 'lab 7kq2m9xd', action: 'handleScan', spreadsheetId: IN_URL })).ok === true && h.calls.cacheGet === 1,
+    'キーの書き方ゆれ・URL 形式のシートIDでも同じ札で通る(' + h.calls.cacheGet + ')');
+  // シートを使わない action はキー×端末の札（シートの札とは別）
+  zeroCalls(h);
+  ok(gpost(h, REQ({ action: 'getWorkerList' })).ok === true && h.calls.cacheGet > 1, '非シート action の1回目は判定する(シートの札では通らない)');
+  ok(h.cache.has(PK(K1, 'DEV1')), '非シート action の通過札');
+  zeroCalls(h);
+  ok(gpost(h, REQ({ action: 'getWorkerList' })).ok === true && h.calls.cacheGet === 1 && h.calls.openById === 0, '非シート action の2回目も get 1回(' + JSON.stringify(h.calls) + ')');
+});
+test('pass_token_ttl_never_exceeds_ledger_readAt_plus_300', () => {
+  const h = gateEnv();
+  const t0 = h.clock.now();
+  const pk = PK(K1, 'DEV1', 'SIN');
+  const scan = () => gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' }));
+  ok(scan().ok === true, 't0：台帳を読んで通る');
+  ok(h.cache.get(pk).exp === t0 + 300000, '札の寿命は台帳を読んだ時刻＋300秒(' + (h.cache.get(pk).exp - t0) + ')');
+  h.clock.set(t0 + 299000); zeroCalls(h);
+  ok(scan().ok === true && h.calls.cacheGet === 1 && h.calls.openById === 0, '＋299秒は通過札で通る(' + JSON.stringify(h.calls) + ')');
+  h.clock.set(t0 + 301000); zeroCalls(h);
+  ok(scan().ok === true, '＋301秒も通る(有効なキー)');
+  ok(h.calls.openById >= 1 && h.calls.cacheGet > 1, '＋301秒は札が無く、台帳を読み直す(' + JSON.stringify(h.calls) + ')');
+  const t1 = t0 + 301000;   // 読み直した台帳の時刻
+  ok(h.cache.get(pk).exp === t1 + 300000, '置き直した札も読み直した時刻＋300秒');
+  // キャッシュの台帳（t1 に読んだもの）から置き直すときは残り時間だけ
+  h.cache.delete(pk); h.clock.set(t1 + 200500); zeroCalls(h);
+  ok(scan().ok === true && h.calls.openById === 0, '台帳はキャッシュから');
+  const e = h.cache.get(pk);
+  ok(e && e.exp <= t1 + 300000 && e.exp === t1 + 200500 + 99000, '残り99.5秒→札は99秒(切り捨て・readAt＋300秒を超えない)(' + (e && e.exp - t1) + ')');
+  // 残りが1秒未満なら置かない
+  h.cache.delete(pk); h.clock.set(t1 + 299500);
+  ok(scan().ok === true && !h.cache.has(pk), '残り1秒未満なら札を置かない');
+  // CacheService が札を長く残してしまっても、中の readAt で readAt＋300秒を過ぎた札は使わない
+  h.clock.set(t1 + 299000 + 300000); scan();   // t2 = t1+599 で読み直して札を置く
+  const t2 = h.clock.now();
+  const e2 = h.cache.get(pk);
+  h.cache.set(pk, { v: e2.v, exp: e2.exp + 3600 * 1000 });   // 寿命だけ1時間延ばす
+  h.clock.set(t2 + 300000); zeroCalls(h);
+  ok(scan().ok === true && h.calls.cacheGet > 1, 'readAt＋300秒を過ぎた札は寿命が残っていても使わない(' + h.calls.cacheGet + ')');
+});
+test('suspension_effective_within_5min_with_pass_token', () => {
+  for (const evict of [true, false]) {
+    const h = gateEnv();
+    const t0 = h.clock.now();
+    const dev1 = (a) => gpost(h, REQ({ action: a, spreadsheetId: 'SIN' }));
+    ok(dev1('handleScan').ok === true && dev1('getWorkerList').ok === true, '有効なうちは通る（札が温まる）');
+    h.books[LEDGER_ID].sheets.find(s => s.name === 'lab-kanri').rows[1][3] = '停止';   // 田中が台帳で停止にする
+    if (evict) {
+      h.cache.delete(LEDGER_CK);   // 台帳のキャッシュだけ先に追い出された
+      h.clock.set(t0 + 10000);
+      const o = gpost(h, REQ({ deviceId: 'DEV9', action: 'handleScan', spreadsheetId: 'SIN' }));
+      ok(o.ok === false && o.reason === 'suspended', '追い出し後に札の無い端末はすぐ止まる(' + JSON.stringify(o) + ')');
+    }
+    h.clock.set(t0 + 300000);
+    for (const a of ['handleScan', 'getWorkerList']) {
+      const r = dev1(a);
+      ok(r.ok === false && r.reason === 'suspended' && r.message === EXPECTED_MSG.suspended, (evict ? '追い出しあり' : '追い出しなし') + '：' + a + ' は台帳 readAt＋300秒で必ず断る(' + JSON.stringify(r) + ')');
+    }
+    ok(h.ran.length === 2, '停止後は処理が走らない(' + h.ran.join() + ')');
+  }
+});
+test('pass_token_not_put_from_snapshot', () => {
+  const h = gateEnv();
+  ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' })).ok === true, '1回目（写しも保存される）');
+  for (const k of passKeys(h)) h.cache.delete(k);
+  h.cache.delete(LEDGER_CK);
+  h.failOpen.add(LEDGER_ID);
+  const r = gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' }));
+  ok(r.ok === true, '台帳が読めなくても写しで通る(' + JSON.stringify(r) + ')');
+  ok(passKeys(h).length === 0, '写しで判定した回は通過札を置かない(' + passKeys(h) + ')');
+  ok(gpost(h, REQ({ action: 'getWorkerList' })).ok === true && passKeys(h).length === 0, '非シート action も写しでは置かない');
+  zeroCalls(h);
+  gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' }));
+  ok(h.calls.openById >= 1, '次も4段の判定（台帳を読みに行く）(' + h.calls.openById + ')');
+});
+test('pass_token_scoped_to_sheet_and_device', () => {
+  const h = gateEnv();
+  h.drive.files.SIN2 = DF('in2', { parents: ['FOH'], driveId: GDR });
+  ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' })).ok === true, 'DEV1×SIN で札');
+  zeroCalls(h);
+  ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN2' })).ok === true && h.calls.driveGet === 1 && h.calls.cacheGet > 1, '別のシートは所属を確かめ直す(' + JSON.stringify(h.calls) + ')');
+  zeroCalls(h);
+  const o = gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SOUT' }));
+  ok(o.ok === false && o.reason === 'outside', '札があっても外のシートは断る(' + JSON.stringify(o) + ')');
+  zeroCalls(h);
+  ok(gpost(h, REQ({ deviceId: 'DEV2', action: 'handleScan', spreadsheetId: 'SIN' })).ok === true && h.calls.openById >= 1, '別の端末は登録から判定する(' + JSON.stringify(h.calls) + ')');
+  ok(usageTab(h).rows.length === 3, 'DEV2 が利用タブに足される');
+  zeroCalls(h);
+  const k4 = gpost(h, REQ({ licenseKey: K4, action: 'getWorkerList' }));
+  ok(k4.ok === true && h.calls.cacheGet > 1, '別のキーは別の札');
+  // 札の中身（キー・端末・シート）が要求と合わなければ使わない（名前の衝突・250字での切り詰め対策）
+  const e = h.cache.get(PK(K1, 'DEV1', 'SIN'));
+  h.cache.set(PK(K1, 'DEV3', 'SIN'), { v: e.v, exp: e.exp });
+  zeroCalls(h);
+  ok(gpost(h, REQ({ deviceId: 'DEV3', action: 'handleScan', spreadsheetId: 'SIN' })).ok === true && h.calls.cacheGet > 1, '中身が別端末の札は使わず判定する');
+  ok(usageTab(h).rows.some(r => r[2] === 'DEV3'), 'DEV3 は台数に数えられる');
+});
+test('pass_token_not_used_by_keyless_or_checkLicense', () => {
+  const h = gateEnv();
+  ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' })).ok === true, '札を置く');
+  zeroCalls(h);
+  const c = gpost(h, REQ({ action: 'checkLicense' }));
+  ok(c.ok === true && h.calls.cacheGet >= 2, 'checkLicense は札を使わず毎回判定する(' + h.calls.cacheGet + ')');
+  const before = passKeys(h).join();
+  const g = gpost(h, { action: 'handleScan', spreadsheetId: 'SOUT', deviceId: 'DEV1' });
+  ok(g.ok === true && g.licenseNotice && g.licenseNotice.daysLeft === 17, 'キー無し(猶予)は今どおり(' + JSON.stringify(g) + ')');
+  ok(passKeys(h).join() === before, 'キー無しは札を置かない');
+  zeroCalls(h);
+  gpost(h, REQ({ action: 'listSites' }));
+  ok(h.calls.driveList === 1 && h.calls.cacheGet > 1, 'listSites は今どおり判定してから一覧(' + JSON.stringify(h.calls) + ')');
+});
+
+// 実物の handleScan を通す現場ブック（件名 B12 に現場ID・分析検体シート無し＝Lコードは前処理シートへ）
+const ZEN_HDR = ['コード', '区画', '色', '振り時刻', '振り担当', 'ろか時刻', 'ろか担当', '分析時刻', '分析担当'];
+const scanEnv = (zenRows) => {
+  const kenmei = []; for (let i = 0; i < 11; i++) kenmei.push(['']); kenmei.push(['現場ID', 'TEDC']);
+  const books = ledgerBook();
+  books.SIN = { '件名': kenmei };
+  if (zenRows) books.SIN['前処理'] = zenRows;
+  const files = {
+    FOH: DF('現場シート', { mimeType: MIME_F, parents: [GDR], driveId: GDR }),
+    SIN: DF('in', { parents: ['FOH'], driveId: GDR })
+  };
+  const h = harness.build({ books: books, drive: { files: files } });
+  ok(gpost(h, REQ({ action: 'checkLicense' })).ok === true && gpost(h, REQ({ deviceId: 'DEV2', action: 'checkLicense' })).ok === true, '端末を先に登録しておく');
+  return h;
+};
+const SCAN = (code, mode, extra) => REQ(Object.assign({ action: 'handleScan', spreadsheetId: 'SIN', code: code, mode: mode, overrideWorker: '田中' }, extra));
+const zenTab = (h) => h.books.SIN.sheets.find(s => s.name === '前処理');
+const zenCodes = (h) => zenTab(h).rows.slice(1).map(r => r[0]);
+
+test('handleScan_takes_no_flag_and_no_scriptlock', () => {
+  const h = scanEnv([ZEN_HDR, ['TEDC-L-0001', '', '']]);
+  const puts = [];
+  const c = h.ctx.CacheService.getScriptCache(), op = c.put;
+  c.put = (k, v, sec) => { puts.push(k); return op(k, v, sec); };
+  for (const round of [1, 2]) {   // 1回目＝判定あり・2回目＝通過札
+    zeroCalls(h); puts.length = 0;
+    const mode = round === 1 ? '振り' : 'ろか';
+    const r = gpost(h, SCAN('TEDC-L-0001', mode));
+    ok(r.ok === true && r.message.indexOf(mode + ' 記録完了') === 0, round + '回目：記録できる(' + JSON.stringify(r) + ')');
+    ok(h.calls.tryLock === 0 && h.calls.releaseLock === 0 && h.calls.waitLock === 0, round + '回目：ScriptLock を取らない(' + JSON.stringify(h.calls) + ')');
+    ok(puts.indexOf('lk_SIN') < 0 && h.calls.sleep === 0, round + '回目：札 lk_SIN を立てず待たない(' + puts + ')');
+  }
+  const row = zenTab(h).rows[1];
+  ok(row[3] instanceof Date && row[4] === '田中' && row[5] instanceof Date && row[6] === '田中', '既にある行のセルに書く(' + JSON.stringify(row) + ')');
+  ok(zenTab(h).rows.length === 2, '行は増えない');
+  const d = gpost(h, SCAN('TEDC-L-0001', '振り'));
+  ok(d.ok === false && d.message.indexOf('振り記録済み') >= 0, '記録済みの確認は今どおり(' + JSON.stringify(d) + ')');
+});
+test('prephase_append_is_guarded', () => {
+  // 前処理シートがまだ無い古い現場：他の端末が札 lk_SIN を5秒持っている → 追加は札が空くまで待つ
+  const h = scanEnv(null);
+  const t = h.clock.now();
+  h.cache.set('lk_SIN', { v: 'other', exp: t + 5000 });
+  const r = gpost(h, SCAN('TEDC-L-0001', '振り'));
+  ok(r.ok === true, '待ってから記録する(' + JSON.stringify(r) + ')');
+  ok(h.clock.now() - t >= 5000, '他の端末の札が消えるまで待った(' + (h.clock.now() - t) + 'ms)');
+  ok(zenTab(h) && zenCodes(h).join() === 'TEDC-L-0001' && zenTab(h).rows[0].join() === ZEN_HDR.join(), '前処理シートを作って1行足す');
+  ok(!h.cache.has('lk_SIN'), '終わったら札は消える');
+  // 既にある行への記録は札を取らない（他の端末が札を持っていても待たない）
+  h.cache.set('lk_SIN', { v: 'other', exp: h.clock.now() + 60000 });
+  const t2 = h.clock.now(); zeroCalls(h);
+  ok(gpost(h, SCAN('TEDC-L-0001', 'ろか')).ok === true && h.clock.now() === t2 && h.calls.sleep === 0, '既にある行は待たない');
+  // 札が30秒取れなければ混み合い・行は足さない
+  h.cache.set('lk_SIN', { v: 'other', exp: h.clock.now() + 3600 * 1000 });
+  const r3 = gpost(h, SCAN('TEDC-L-0002', '振り'));
+  ok(r3.ok === false && r3.reason === 'busy' && r3.message === EXPECTED_MSG.busy, '30秒取れなければ busy(' + JSON.stringify(r3) + ')');
+  ok(zenCodes(h).join() === 'TEDC-L-0001', '混み合いのときは行を足さない');
+  // 前処理シートの作成も札の中
+  const h2 = scanEnv(null);
+  h2.cache.set('lk_SIN', { v: 'other', exp: h2.clock.now() + 3600 * 1000 });
+  ok(gpost(h2, SCAN('TEDC-L-0001', '振り')).reason === 'busy' && !zenTab(h2), '札が取れなければ前処理シートも作らない');
+});
+test('prephase_append_calls_sheet_lock_and_serializes', () => {
+  const h = scanEnv([ZEN_HDR]);
+  const orig = h.ctx.license_withSheetLock_;
+  const seen = [];
+  h.ctx.license_withSheetLock_ = (k, fn, onBusy) => { seen.push(k); return orig(k, fn, onBusy); };
+  ok(gpost(h, SCAN('TEDC-L-0001', '振り')).ok === true && seen.join() === 'lk_SIN', '行を足すときだけ license_withSheetLock_(lk_<シートID>) を呼ぶ(' + seen + ')');
+  ok(gpost(h, SCAN('TEDC-L-0001', 'ろか')).ok === true && seen.length === 1, '既にある行では呼ばない');
+  // 2台がほぼ同時に別の L コードを足す：DEV1 が札の中にいる間に DEV2 が来る → DEV2 は待って足さない（混み合い）
+  let nested = false, inner = null;
+  h.ctx.license_withSheetLock_ = (k, fn, onBusy) => orig(k, () => {
+    if (!nested) { nested = true; inner = gpost(h, SCAN('TEDC-L-0003', '振り', { deviceId: 'DEV2' })); }
+    return fn();
+  }, onBusy);
+  const a = gpost(h, SCAN('TEDC-L-0002', '振り'));
+  ok(a.ok === true, 'DEV1 は記録する(' + JSON.stringify(a) + ')');
+  ok(inner && inner.ok === false && inner.reason === 'busy', 'DEV1 の追加中に DEV2 は足せず待つ(' + JSON.stringify(inner) + ')');
+  h.ctx.license_withSheetLock_ = orig;
+  ok(gpost(h, SCAN('TEDC-L-0003', '振り', { deviceId: 'DEV2' })).ok === true, 'DEV2 が読み直すと記録できる');
+  ok(zenCodes(h).join() === 'TEDC-L-0001,TEDC-L-0002,TEDC-L-0003', '3行とも別の行に残る(' + zenCodes(h) + ')');
+  // 外で探してから札を取るまでの間に他の端末が同じコードを足していた → 札の中で探し直して二重に足さない
+  h.ctx.license_withSheetLock_ = (k, fn, onBusy) => orig(k, () => { zenTab(h).appendRow(['TEDC-L-0004', '', '']); return fn(); }, onBusy);
+  const b = gpost(h, SCAN('TEDC-L-0004', '振り'));
+  h.ctx.license_withSheetLock_ = orig;
+  ok(b.ok === true && zenCodes(h).filter(c => c === 'TEDC-L-0004').length === 1, '札の中で探し直して同じコードの行を二重に作らない(' + zenCodes(h) + ')');
+  const r4 = zenTab(h).rows.find(r => r[0] === 'TEDC-L-0004');
+  ok(r4[3] instanceof Date && r4[4] === '田中', '他の端末が足した行に記録する');
+});
 
 for (const [name, fn] of tests) {
   try { fn(); } catch (e) { ok(false, name + ' が例外: ' + (e && e.stack || e)); }
