@@ -226,3 +226,106 @@ function license_releaseFlag_(cache, lock, lockKey, token) {
     if (got) { try { lock.releaseLock(); } catch (e) { Logger.log('license_withSheetLock_ ScriptLock解放失敗: ' + e); } }
   }
 }
+
+// ---- 端末の登録（SPEC 2-2・3-2 の5）----
+// 台帳の「lab-kanri利用」タブ：1キー×1端末＝1行。A〜I を GAS が書き、J（呼び名）は田中が手で書く（GAS は触らない）。
+const LICENSE_USE_TAB_ = 'lab-kanri利用';
+const LICENSE_USE_HEADER_ = ['キー', '会社名', '端末ID', '端末名（機種）', '初回利用', '最終利用', '利用回数', '版', '最終判定', '呼び名'];
+const LICENSE_TOUCH_SEC_ = 3600;   // 書き直しは1台1時間に1回
+
+// 利用タブの全行を見出し名で引いて調べる。tab が null（まだ無い）なら空として返す。
+// 返す: { c(列名)→0始まり列番号, values, found(行の添字 or -1), used(そのキーの行数) }
+function license_useScan_(tab, key, deviceId) {
+  if (!tab || tab.getLastRow() === 0) return { c: null, values: [], found: -1, used: 0 };
+  const values = tab.getDataRange().getValues();
+  const c = license_cols_(values[0] || []);
+  const cKey = c('キー'), cDev = c('端末ID');
+  if (cKey < 0 || cDev < 0) throw new Error('lab-kanri利用 タブに「キー」「端末ID」の見出しがありません');
+  let found = -1, used = 0;
+  for (let i = 1; i < values.length; i++) {
+    if (license_normalizeKey_(values[i][cKey]) !== key) continue;   // 手で直された小文字・空白も同じキーとして数える
+    used++;
+    if (found < 0 && String(values[i][cDev]).trim() === deviceId) found = i;
+  }
+  return { c: c, values: values, found: found, used: used };
+}
+
+// 端末をキーに登録する／最終利用を書き直す。
+// 戻り値: { ok:true, used, limit } | { ok:false, reason:'too_many'|'busy'|'ledger_unavailable', message }
+// - 既にある端末は常に通す（上限を下げられていても）。新しい端末は limit===0（無制限）か used<limit のとき行を足す
+// - 同じ端末は1時間に1回しか書かない（CacheService）。間引き中は台帳を開かずに返す
+// - 書くのは台帳の札（lk_ledger）の中だけ。新しい端末は札の中で数え直す（最後の1枠を2台が取り合っても1台だけ）
+function license_touchDevice_(key, entry, deviceId, deviceName, appVersion, verdict, now) {
+  const limit = entry.limit;
+  const cache = CacheService.getScriptCache();
+  const ckey = ('lk_touch_' + key + '_' + deviceId).slice(0, 250);
+  const hit = cache.get(ckey);
+  if (hit) {
+    try { const h = JSON.parse(hit); return { ok: true, used: h.used, limit: h.limit }; } catch (e) { /* 壊れていれば書き直す */ }
+  }
+  const fail = (reason, message) => ({ ok: false, reason: reason, message: message || LICENSE_MSG_[reason] });
+  const unavailable = () => fail('ledger_unavailable');
+  const stamp = Utilities.formatDate(new Date(now), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm');
+
+  // 札の外で先に一度見て、既にある端末か新しい端末かを決める（札が取れなかったときの扱いが違うため）
+  let pre;
+  try {
+    pre = license_useScan_(SpreadsheetApp.openById(LICENSE_LEDGER_ID).getSheetByName(LICENSE_USE_TAB_), key, deviceId);
+  } catch (e) {
+    Logger.log('利用タブを読めない: ' + e);
+    return unavailable();   // 読めないのに行を足さない（台数の数え違いを防ぐ）
+  }
+  const isNew = pre.found < 0;
+
+  let wrote = false;
+  let res;
+  try {
+    res = license_withSheetLock_('lk_ledger', () => {
+      const book = SpreadsheetApp.openById(LICENSE_LEDGER_ID);
+      let tab = book.getSheetByName(LICENSE_USE_TAB_);
+      if (!tab) {   // 無ければ作って見出しを書く（一番右に足される）
+        tab = book.insertSheet(LICENSE_USE_TAB_);
+        tab.getRange(1, 1, 1, LICENSE_USE_HEADER_.length).setValues([LICENSE_USE_HEADER_]);
+      }
+      let s = license_useScan_(tab, key, deviceId);   // 札の中で数え直す
+      if (!s.c) {   // 空のタブ：見出しから書く
+        tab.getRange(1, 1, 1, LICENSE_USE_HEADER_.length).setValues([LICENSE_USE_HEADER_]);
+        s = license_useScan_(tab, key, deviceId);
+      }
+      const apply = (s) => {
+        const c = s.c;
+        if (s.found >= 0) {   // 既にある端末：F〜I だけ書き直す（J 呼び名は触らない）
+          const r = s.found + 1;
+          const times = parseInt(String(s.values[s.found][c('利用回数')]), 10);
+          const put = (name, v, text) => { const col = c(name); if (col >= 0) { const rg = tab.getRange(r, col + 1); if (text) rg.setNumberFormat('@'); rg.setValue(v); } };
+          put('最終利用', stamp, true);
+          put('利用回数', (isNaN(times) ? 0 : times) + 1);
+          put('版', appVersion);
+          put('最終判定', verdict);
+          wrote = true;
+          return { ok: true, used: s.used, limit: limit };
+        }
+        if (limit !== 0 && s.used >= limit) return fail('too_many', LICENSE_MSG_.too_many.replace('N', String(limit)));
+        const row = LICENSE_USE_HEADER_.map(() => '');
+        const width = Math.max(row.length, s.values[0].length);
+        while (row.length < width) row.push('');
+        const set = (name, v) => { const col = c(name); if (col >= 0) row[col] = v; };
+        set('キー', key); set('会社名', entry.company); set('端末ID', deviceId); set('端末名（機種）', deviceName);
+        set('初回利用', stamp); set('最終利用', stamp); set('利用回数', 1); set('版', appVersion); set('最終判定', verdict);
+        const r = s.values.length + 1;
+        ['初回利用', '最終利用'].forEach((n) => { if (c(n) >= 0) tab.getRange(r, c(n) + 1).setNumberFormat('@'); });   // 日付が日付型に化けないよう文字として書く
+        tab.getRange(r, 1, 1, width).setValues([row]);   // J（呼び名）は空のまま
+        wrote = true;
+        return { ok: true, used: s.used + 1, limit: limit };
+      };
+      return apply(s);
+    }, () => isNew ? fail('busy') : { ok: true, used: pre.used, limit: limit });   // 既にある端末は書けなくても通す（最終利用が古いだけ）
+  } catch (e) {
+    Logger.log('利用タブへの書き込み失敗: ' + e);
+    return unavailable();
+  }
+  if (res.ok && wrote) {
+    try { cache.put(ckey, JSON.stringify({ used: res.used, limit: res.limit }), LICENSE_TOUCH_SEC_); } catch (e) { Logger.log('間引きの札を置けず: ' + e); }
+  }
+  return res;
+}
