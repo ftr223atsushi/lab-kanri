@@ -151,7 +151,8 @@ function build(opts) {
   for (const [k, v] of Object.entries(opts.props || {})) propMap.set(k, String(v));
   const props = {
     getProperty(k) { calls.propGet++; return propMap.has(k) ? propMap.get(k) : null; },
-    setProperty(k, v) { calls.propSet++; propMap.set(k, String(v)); return props; },
+    // 本物の上限：1つの値は 9KB（UTF-8のバイト数）まで。超えたら本物と同じく例外にする
+    setProperty(k, v) { calls.propSet++; if (Buffer.byteLength(String(v), 'utf8') > 9 * 1024) throw new Error('Properties 模擬: 値が9KBを超えている'); propMap.set(k, String(v)); return props; },
     deleteProperty(k) { calls.propDelete++; propMap.delete(k); return props; }
   };
 

@@ -78,6 +78,10 @@ test('harness_selftest', () => {
   const pr = c.PropertiesService.getScriptProperties();
   pr.setProperty('a', 1); ok(pr.getProperty('a') === '1', 'props: 文字列で返す');
   pr.deleteProperty('a'); ok(pr.getProperty('a') === null, 'props: delete');
+  pr.setProperty('p9', 'x'.repeat(9 * 1024)); ok(pr.getProperty('p9').length === 9 * 1024, 'props: 9KBちょうどは通る');
+  ok(throws(() => pr.setProperty('p9b', 'x'.repeat(9 * 1024 + 1))), 'props: 9KB超の値は例外');
+  pr.setProperty('p9d', 'あ'.repeat(3000)); ok(true, 'props: 日本語3000字=9000バイトは通る');
+  ok(throws(() => pr.setProperty('p9e', 'あ'.repeat(3100))), 'props: 値はバイト数で数える(日本語3100字=9300バイトは例外)');
 
   // failOpen / openById の回数
   ok(c.SpreadsheetApp.openById('A').getSheetByName('t') !== null, 'openById: 本が開ける');
@@ -136,6 +140,256 @@ test('harness_selftest', () => {
 
   // ContentService
   ok(c.ContentService.createTextOutput('x').setMimeType(c.ContentService.MimeType.JSON).getContent() === 'x', 'ContentService');
+});
+
+
+// ---- Task 2：台帳の読み込み・写し・猶予・キー判定 ----
+const LEDGER_ID = '1Jw5RwIFseRFZUOaLo90bg2pHRcvN4VLBbJrH7MDMjQ0';
+const K1 = 'LAB-7KQ2-M9XD', K2 = 'LAB-AAAA-BBBB', K3 = 'LAB-CCCC-DDDD', K4 = 'LAB-EEEE-FFFF';
+const HDR = ['キー', '会社名', '接続先', '状態', '期限', '台数上限', '備考'];
+const msJst = (s) => new Date(s + '+09:00').getTime();
+// 台帳の模擬ブック。lab-kanri / 設定 / 顧客 の3タブ（列は見出し名で引くので、顧客は実物どおり12列にする）
+function ledgerBook(o) {
+  o = o || {};
+  const labRows = o.lab || [
+    [K1, 'HSSエンジニヤリング', 'shast-hsseng', '有効', '2027/04/13', '', ''],
+    [K2, '停止中の会社', 'shast-stop', '停止', '', '5', ''],
+    [K3, '期限切れの会社', 'shast-old', '', '2026/11/01', '3', ''],
+    [K4, '自社の開発用', 'shast-writer', '有効', '', '0', '']
+  ];
+  const setRows = [['項目', '値']];
+  if (o.grace !== null) setRows.push(['lab-kanri猶予期限', o.grace === undefined ? '2026-11-19' : o.grace]);
+  setRows.push(['最低版', '3.30'], ['お知らせ', 'テスト']);
+  const cust = o.cust || [
+    ['shast-hsseng', 'HSS', '', '', '', '', '', '', '', '', '', 'DRIVE_HSS'],
+    ['shast-writer', '自社', '', '', '', '', '', '', '', '', '', 'DRIVE_OWN']
+  ];
+  const custHdr = ['接続先', '会社名', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', '共有ドライブID'];
+  const books = {};
+  books[LEDGER_ID] = { 'lab-kanri': [HDR].concat(labRows), '設定': setRows, '顧客': [custHdr].concat(cust) };
+  return books;
+}
+const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const mkKey = (i) => 'LAB-' + ALPHA[i % 32] + ALPHA[(i * 7 + 3) % 32] + 'AB-' + ALPHA[(i >> 5) % 32] + 'CD' + ALPHA[(i * 11 + 5) % 32];
+const buildLedger = (o, extra) => harness.build(Object.assign({ books: ledgerBook(o) }, extra || {}));
+const call = (h, expr, ...a) => h.ctx[expr](...a);
+
+test('normalize_key_variants', () => {
+  const h = harness.build({});
+  const n = (s) => call(h, 'license_normalizeKey_', s);
+  ok(n('lab7kq2m9xd') === 'LAB-7KQ2-M9XD', '小文字・ハイフン無し');
+  ok(n(' LAB-7KQ2-M9XD ') === 'LAB-7KQ2-M9XD', '前後空白');
+  ok(n('lab 7kq2 m9xd') === 'LAB-7KQ2-M9XD', '途中の空白');
+  ok(n('LAB-7KQ2-M9X') === '', '1文字足りない');
+  ok(n('SHAST-AAAA-BBBB') === '', '接頭辞違い');
+  ok(n('LAB-7KQ0-M9XD') === '', '使えない文字 0');
+  ok(n('LAB-7KQ2-M9XDD') === '', '1文字多い');
+  ok(n('') === '' && n(null) === '' && n(undefined) === '', '空・null・undefined');
+});
+
+test('key_ok', () => {
+  const h = buildLedger();
+  const led = call(h, 'license_ledger_', h.clock.now());
+  const r = call(h, 'license_checkKey_', led, 'lab-7kq2-m9xd', 'DEV1', h.clock.now());
+  ok(r.ok === true, 'ok');
+  ok(r.key === K1, '正規化したキーを返す');
+  ok(r.entry.company === 'HSSエンジニヤリング' && r.entry.conn === 'shast-hsseng', '会社名・接続先');
+  ok(r.entry.status === 'valid' && r.entry.expires === '2027/04/13', '状態・期限');
+  ok(r.entry.limit === 5, '台数上限 空＝5');
+  ok(r.entry.row === 2, '行番号は1始まりのシート行');
+  const r4 = call(h, 'license_checkKey_', led, K4, 'DEV1', h.clock.now());
+  ok(r4.ok === true && r4.entry.row === 5, '4行目のデータ＝シート5行目');
+});
+test('key_unknown', () => {
+  const h = buildLedger();
+  const led = call(h, 'license_ledger_', h.clock.now());
+  const t = h.clock.now();
+  let r = call(h, 'license_checkKey_', led, 'LAB-ZZZZ-ZZZZ', 'D', t);
+  ok(r.ok === false && r.reason === 'unknown_key' && r.message === EXPECTED_MSG.unknown_key, '登録なし');
+  r = call(h, 'license_checkKey_', led, '', 'D', t);
+  ok(r.reason === 'unknown_key', '空キー');
+  r = call(h, 'license_checkKey_', led, 'SHAST-AAAA-BBBB', 'D', t);
+  ok(r.reason === 'unknown_key', '形の違うキー');
+});
+test('key_suspended', () => {
+  const h = buildLedger();
+  const led = call(h, 'license_ledger_', h.clock.now());
+  const r = call(h, 'license_checkKey_', led, K2, 'D', h.clock.now());
+  ok(r.ok === false && r.reason === 'suspended' && r.message === EXPECTED_MSG.suspended, '停止');
+  const h2 = buildLedger({ lab: [[K1, 'X', 'c', '保留', '', '', '']] });
+  const r2 = call(h2, 'license_checkKey_', call(h2, 'license_ledger_', h2.clock.now()), K1, 'D', h2.clock.now());
+  ok(r2.reason === 'suspended', '知らない状態の値は停止扱い');
+});
+test('key_expired', () => {
+  const h = buildLedger({}, { now: msJst('2026-11-02T09:00:00') });
+  const led = call(h, 'license_ledger_', h.clock.now());
+  const r = call(h, 'license_checkKey_', led, K3, 'D', h.clock.now());
+  ok(r.ok === false && r.reason === 'expired', '期限切れ');
+  ok(r.message === 'ライセンスの期限（2026/11/01）が過ぎています。販売元にご連絡ください', '文に期限の日付が入る: ' + r.message);
+  // 期限当日の終わりまでは有効
+  const h2 = buildLedger({}, { now: msJst('2026-11-01T23:59:59') });
+  const r2 = call(h2, 'license_checkKey_', call(h2, 'license_ledger_', h2.clock.now()), K3, 'D', h2.clock.now());
+  ok(r2.ok === true, '期限の日の23:59:59は有効');
+  const h3 = buildLedger({}, { now: msJst('2026-11-02T00:00:00') });
+  const r3 = call(h3, 'license_checkKey_', call(h3, 'license_ledger_', h3.clock.now()), K3, 'D', h3.clock.now());
+  ok(r3.reason === 'expired', '翌日0:00から期限切れ');
+  // ハイフン区切りの日付・桁なしも同じ形(YYYY/MM/DD)にそろう
+  const h4 = buildLedger({ lab: [[K1, 'X', 'c', '有効', '2026-11-1', '', '']] }, { now: msJst('2026-11-02T09:00:00') });
+  const l4 = call(h4, 'license_ledger_', h4.clock.now());
+  ok(l4.keys[K1].expires === '2026/11/01', '2026-11-1 → 2026/11/01');
+  const h5 = buildLedger({ lab: [[K1, 'X', 'c', '有効', '', '', '']] });
+  ok(call(h5, 'license_ledger_', h5.clock.now()).keys[K1].expires === '', '空の期限は空');
+});
+test('no_device', () => {
+  const h = buildLedger();
+  const led = call(h, 'license_ledger_', h.clock.now());
+  for (const d of ['', null, undefined]) {
+    const r = call(h, 'license_checkKey_', led, K1, d, h.clock.now());
+    ok(r.ok === false && r.reason === 'no_device' && r.message === EXPECTED_MSG.no_device, 'deviceId=' + d);
+  }
+  // 順序：不明キーは端末が空でも unknown_key
+  ok(call(h, 'license_checkKey_', led, 'LAB-ZZZZ-ZZZZ', '', h.clock.now()).reason === 'unknown_key', '不明キーが先');
+  ok(call(h, 'license_checkKey_', led, K2, '', h.clock.now()).reason === 'suspended', '停止が端末より先');
+});
+test('limit_blank_is_5', () => {
+  const h = buildLedger();
+  const led = call(h, 'license_ledger_', h.clock.now());
+  ok(led.keys[K1].limit === 5, 'F列空 → 5');
+  ok(led.keys[K3].limit === 3, '数字はそのまま');
+});
+test('limit_zero_unlimited', () => {
+  const h = buildLedger();
+  const led = call(h, 'license_ledger_', h.clock.now());
+  ok(led.keys[K4].limit === 0, '0 は 0 のまま(無制限)');
+});
+
+test('grace_before', () => {
+  const h = buildLedger({}, { now: msJst('2026-11-05T10:00:00') });
+  const g = call(h, 'license_grace_', call(h, 'license_ledger_', h.clock.now()), h.clock.now());
+  ok(g.inGrace === true && g.daysLeft === 14, '猶予中・残り14日: ' + JSON.stringify(g));
+  const hl = buildLedger({}, { now: msJst('2026-11-19T23:59:59') });
+  const gl = call(hl, 'license_grace_', call(hl, 'license_ledger_', hl.clock.now()), hl.clock.now());
+  ok(gl.inGrace === true && gl.daysLeft === 0, '猶予期限の日の終わりまでは猶予中(残り0)');
+});
+test('grace_after', () => {
+  const h = buildLedger({}, { now: msJst('2026-11-20T00:00:00') });
+  const g = call(h, 'license_grace_', call(h, 'license_ledger_', h.clock.now()), h.clock.now());
+  ok(g.inGrace === false, '猶予明け');
+});
+test('grace_missing_row_is_grace', () => {
+  for (const o of [{ grace: null }, { grace: '' }, { grace: 'へんな文字' }]) {
+    const h = buildLedger(o);
+    const led = call(h, 'license_ledger_', h.clock.now());
+    const g = call(h, 'license_grace_', led, h.clock.now());
+    ok(led.graceUntil === '' && g.inGrace === true && g.daysLeft === null, '行なし/空/読めない → 猶予中・daysLeft null: ' + JSON.stringify(o));
+  }
+});
+
+test('ledger_reads_all_tabs', () => {
+  const h = buildLedger();
+  const led = call(h, 'license_ledger_', h.clock.now());
+  ok(led.graceUntil === '2026-11-19', '猶予期限');
+  ok(led.drives['shast-hsseng'] === 'DRIVE_HSS' && led.drives['shast-writer'] === 'DRIVE_OWN', '顧客タブの 接続先→共有ドライブID');
+  ok(led.readAt === h.clock.now() && led.fromSnapshot === false, 'readAt・fromSnapshot');
+  ok(Object.keys(led.keys).length === 4, '4社');
+  // 列の位置が変わっても見出し名で引ける
+  const books = ledgerBook();
+  books[LEDGER_ID]['lab-kanri'] = [['備考', '台数上限', '期限', '状態', '接続先', '会社名', 'キー'], ['', '7', '', '有効', 'c1', 'Z社', K1]];
+  const h2 = harness.build({ books });
+  const l2 = call(h2, 'license_ledger_', h2.clock.now());
+  ok(l2.keys[K1].company === 'Z社' && l2.keys[K1].limit === 7 && l2.keys[K1].conn === 'c1', '見出し名で列を引く');
+});
+
+test('ledger_cached_5min', () => {
+  const h = buildLedger();
+  call(h, 'license_ledger_', h.clock.now());
+  const n1 = h.calls.openById;
+  ok(n1 === 1, '1回目は台帳を開く');
+  h.clock.advance(60 * 1000);
+  const l2 = call(h, 'license_ledger_', h.clock.now());
+  ok(h.calls.openById === n1, '2回目(1分後)は openById を呼ばない');
+  ok(l2.keys[K1] && l2.fromSnapshot === false, 'キャッシュの中身で判定できる');
+  h.clock.advance(4 * 60 * 1000);   // 合計5分(ちょうど)
+  h.clock.advance(1000);            // 5分1秒
+  call(h, 'license_ledger_', h.clock.now());
+  ok(h.calls.openById === n1 + 1, '5分1秒後は台帳を開き直す');
+  ok(h.cache.has('lk_ledger_v1'), 'キャッシュのキーは lk_ledger_v1');
+});
+test('ledger_cache_ttl_is_300s', () => {
+  const h = buildLedger();
+  call(h, 'license_ledger_', h.clock.now());
+  const e = h.cache.get('lk_ledger_v1');
+  ok(e && e.exp - h.clock.now() === 300 * 1000, '寿命300秒');
+});
+test('ledger_snapshot_used_when_open_fails', () => {
+  const h = buildLedger();
+  call(h, 'license_ledger_', h.clock.now());
+  ok(h.props.has('LK_LEDGER_SNAPSHOT'), 'LK_LEDGER_SNAPSHOT に写しを保存');
+  h.clock.advance(6 * 60 * 1000);   // キャッシュ切れ
+  h.failOpen.add(LEDGER_ID);
+  const led = call(h, 'license_ledger_', h.clock.now());
+  ok(led && led.fromSnapshot === true, '写しを返す');
+  const r = call(h, 'license_checkKey_', led, K1, 'D', h.clock.now());
+  ok(r.ok === true, '写しで判定が通る');
+  ok(led.drives['shast-hsseng'] === 'DRIVE_HSS' && led.graceUntil === '2026-11-19', '写しにも猶予期限・ドライブID');
+});
+test('ledger_snapshot_too_old', () => {
+  const h = buildLedger();
+  call(h, 'license_ledger_', h.clock.now());
+  h.clock.advance(25 * 3600 * 1000);
+  h.failOpen.add(LEDGER_ID);
+  ok(call(h, 'license_ledger_', h.clock.now()) === null, '25時間後に例外 → null');
+});
+test('ledger_snapshot_23h_ok_and_boundary', () => {
+  const h = buildLedger();
+  call(h, 'license_ledger_', h.clock.now());
+  h.failOpen.add(LEDGER_ID);
+  h.clock.advance(23 * 3600 * 1000);
+  ok(call(h, 'license_ledger_', h.clock.now()) !== null, '23時間後は写しが使える');
+  h.clock.advance(3600 * 1000);   // ちょうど24時間
+  ok(call(h, 'license_ledger_', h.clock.now()) !== null, 'ちょうど24時間までは使える');
+  h.clock.advance(1000);
+  ok(call(h, 'license_ledger_', h.clock.now()) === null, '24時間1秒後は使えない');
+});
+test('ledger_no_snapshot_and_open_fails', () => {
+  const h = buildLedger();
+  h.failOpen.add(LEDGER_ID);
+  ok(call(h, 'license_ledger_', h.clock.now()) === null, '写しが無く開けない → null');
+});
+test('ledger_missing_lab_tab_falls_back', () => {
+  const books = ledgerBook(); delete books[LEDGER_ID]['lab-kanri'];
+  const h = harness.build({ books });
+  ok(call(h, 'license_ledger_', h.clock.now()) === null, 'lab-kanri タブが無い → 読めない扱い');
+  ok(!h.props.has('LK_LEDGER_SNAPSHOT') && !h.cache.has('lk_ledger_v1'), '壊れた中身は保存しない');
+});
+test('ledger_corrupt_snapshot_ignored', () => {
+  const h = buildLedger({}, { props: { LK_LEDGER_SNAPSHOT: '{こわれた' } });
+  h.failOpen.add(LEDGER_ID);
+  ok(call(h, 'license_ledger_', h.clock.now()) === null, '壊れた写しは null');
+});
+
+test('snapshot_under_9kb_realistic', () => {
+  const lab = [], cust = [];
+  for (let i = 0; i < 30; i++) {
+    const c = String(i).padStart(2, '0');
+    lab.push([mkKey(i), '株式会社テスト環境調査サービス' + c, 'shast-company' + c, '有効', '2027/04/13', '5', 'メモ'.repeat(10)]);
+  }
+  for (let i = 0; i < 10; i++) cust.push(['shast-company' + String(i).padStart(2, '0'), 'x', '', '', '', '', '', '', '', '', '', '0A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q']);
+  const h = buildLedger({ lab, cust });
+  const led = call(h, 'license_ledger_', h.clock.now());
+  ok(Object.keys(led.keys).length === 30, '30社読めた(' + Object.keys(led.keys).length + ')');
+  const v = h.props.get('LK_LEDGER_SNAPSHOT');
+  ok(v != null, '写しが保存できた(9KB上限に引っかからない)');
+  ok(Buffer.byteLength(v, 'utf8') < 9 * 1024, '写し ' + Buffer.byteLength(v, 'utf8') + ' バイト < 9216');
+  ok(v.indexOf('備考') < 0 && v.indexOf('メモ') < 0, '備考は写しに入れない');
+});
+test('snapshot_too_big_does_not_break_read', () => {
+  // 9KB を超える台帳でも、読み取り自体は成功する（写しだけ残せない）
+  const lab = [];
+  for (let i = 0; i < 200; i++) lab.push([mkKey(i), '会社名が長めの株式会社' + i, 'shast-x' + i, '有効', '', '', '']);
+  const h = buildLedger({ lab });
+  const led = call(h, 'license_ledger_', h.clock.now());
+  ok(led && led.fromSnapshot === false && Object.keys(led.keys).length > 100, '読めて返る');
 });
 
 for (const [name, fn] of tests) {
