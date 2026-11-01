@@ -12,6 +12,7 @@
 //   h.calls.openById / driveGet / driveList / flush / tryLock ...  // 呼ばれた回数
 //   h.failOpen.add(id)                 // そのIDの openById が例外を投げる
 //   h.failDrive = true                 // Drive.Files.list/get が例外を投げる
+//   h.lockBusy = true                  // tryLock(ms)/waitLock(ms) が ms だけ時計を進めてから失敗する
 //   h.eval('APP_VERSION')              // vm 内の const も読める
 const fs = require('fs'), vm = require('vm'), path = require('path');
 
@@ -78,13 +79,19 @@ function build(opts) {
   // ---- ドライブ ----
   const driveFiles = Object.assign({}, (opts.drive && opts.drive.files) || {});
   h.drive = { files: driveFiles };
+  // Drive v3 の返り値：fields を指定しなければ id,name,mimeType だけ。指定したらそれだけ（'*' は全部）。
   const toApi = (id, f, fields) => {
     const full = { id, name: f.name, mimeType: f.mimeType, parents: (f.parents || []).slice(), driveId: f.driveId, trashed: !!f.trashed, modifiedTime: f.modifiedTime };
-    if (!fields) return full;
-    const o = { id };
-    for (const k of String(fields).replace(/files\(|\)/g, '').split(',').map(s => s.trim()).filter(Boolean)) if (k in full) o[k] = full[k];
+    const want = fields ? String(fields).split(',').map(s => s.trim()).filter(Boolean) : ['id', 'name', 'mimeType'];
+    if (want.includes('*')) return full;
+    const o = {};
+    for (const k of want) if (k in full && full[k] !== undefined) o[k] = full[k];
     return o;
   };
+  // list の fields は `files(id,name)` / `nextPageToken,files(id,name)` 形式。files(...) の中身を取り出す（無ければ null＝files を返さない）
+  const filesFields = (fields) => { const m = String(fields).match(/files\(([^)]*)\)/); return m ? m[1] : null; };
+  // 共有ドライブのファイルは supportsAllDrives:true が無いと本物では扱えない
+  const needSupports = (f, params) => { if (f.driveId && !(params && params.supportsAllDrives === true)) throw new Error('Drive 模擬: 共有ドライブのファイルには supportsAllDrives:true が要る'); };
   const matchQ = (f, q) => {   // 解釈するのは `'<id>' in parents` / name='…' / mimeType='…' / trashed=false|true を ` and ` でつないだもの
     for (const term of String(q || '').split(/\s+and\s+/).map(s => s.trim()).filter(Boolean)) {
       let m;
@@ -101,15 +108,23 @@ function build(opts) {
       calls.driveList++;
       if (h.failDrive) throw new Error('Drive 模擬: 失敗させている (failDrive)');
       params = params || {};
+      if (params.corpora === 'drive' || params.corpora === 'allDrives') {
+        if (params.supportsAllDrives !== true || params.includeItemsFromAllDrives !== true) throw new Error('Drive 模擬: corpora=' + params.corpora + ' には supportsAllDrives:true と includeItemsFromAllDrives:true が要る');
+      }
+      if (params.corpora === 'drive' && !params.driveId) throw new Error('Drive 模擬: corpora=drive には driveId が要る');
       let rows = Object.entries(driveFiles).filter(([, f]) => matchQ(f, params.q));
+      rows.forEach(([, f]) => needSupports(f, params));
       if (params.orderBy === 'modifiedTime desc') rows.sort((a, b) => String(b[1].modifiedTime || '').localeCompare(String(a[1].modifiedTime || '')));
       if (params.pageSize) rows = rows.slice(0, params.pageSize);
-      return { files: rows.map(([id, f]) => toApi(id, f, params.fields)) };
+      const ff = params.fields ? filesFields(params.fields) : undefined;
+      if (ff === null) return {};   // fields に files(...) が無い＝ファイルは返らない
+      return { files: rows.map(([id, f]) => toApi(id, f, ff)) };
     },
     get(id, params) {
       calls.driveGet++;
       if (h.failDrive) throw new Error('Drive 模擬: 失敗させている (failDrive)');
       if (!driveFiles[id]) throw new Error('File not found: ' + id);
+      needSupports(driveFiles[id], params);
       return toApi(id, driveFiles[id], params && params.fields);
     }
   } };
@@ -119,7 +134,14 @@ function build(opts) {
   h.cache = cacheMap;   // key -> {v, exp}
   const cache = {
     get(k) { calls.cacheGet++; const e = cacheMap.get(k); if (!e) return null; if (e.exp <= clock.now()) { cacheMap.delete(k); return null; } return e.v; },
-    put(k, v, sec) { calls.cachePut++; cacheMap.set(k, { v: String(v), exp: clock.now() + (sec == null ? 600 : sec) * 1000 }); },
+    // 本物の上限：寿命は最長21600秒(6時間)・値は100KB・キーは250字。超えたら本物と同じく例外にする
+    put(k, v, sec) {
+      calls.cachePut++;
+      if (String(k).length > 250) throw new Error('Cache 模擬: キーが250字を超えている');
+      if (Buffer.byteLength(String(v), 'utf8') > 100 * 1024) throw new Error('Cache 模擬: 値が100KBを超えている');
+      if (sec != null && sec > 21600) throw new Error('Cache 模擬: 寿命は最長21600秒(6時間)');
+      cacheMap.set(k, { v: String(v), exp: clock.now() + (sec == null ? 600 : sec) * 1000 });
+    },
     remove(k) { calls.cacheRemove++; cacheMap.delete(k); }
   };
 
@@ -137,8 +159,8 @@ function build(opts) {
   let held = false;
   h.lockBusy = false;
   const lock = {
-    tryLock(ms) { calls.tryLock++; if (h.lockBusy) return false; held = true; return true; },
-    waitLock(ms) { calls.waitLock++; if (h.lockBusy) throw new Error('Could not obtain lock'); held = true; },
+    tryLock(ms) { calls.tryLock++; if (h.lockBusy) { clock.advance(ms); return false; } held = true; return true; },   // 混んでいれば待った分だけ時計が進む
+    waitLock(ms) { calls.waitLock++; if (h.lockBusy) { clock.advance(ms); throw new Error('Could not obtain lock'); } held = true; },
     releaseLock() { calls.releaseLock++; held = false; },
     hasLock() { return held; }
   };
