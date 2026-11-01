@@ -2,3 +2,4 @@
 # 配布用APKの置き場 (29MBなので git 管理外)
 配布/
 clasp-out/
+.worktrees/
