@@ -9,6 +9,7 @@ cd "$(dirname "$0")"
 export PATH="$HOME/.local/node/bin:$PATH"
 rm -rf clasp-out && mkdir -p clasp-out
 cp "Code_v2.gs" "clasp-out/コード.js"
+cp License.gs "clasp-out/ライセンス.js"
 cp appsscript.json clasp-out/appsscript.json
 clasp push -f
 if [ "$1" = "deploy" ]; then
