@@ -762,6 +762,207 @@ test('missing_optional_header_logged_not_thrown', () => {
 });
 
 
+// ---- Task 5: 現場シートフォルダ・シートの所属・一覧 ----
+const MIME_F = 'application/vnd.google-apps.folder', MIME_S = 'application/vnd.google-apps.spreadsheet';
+const DF = (name, o) => Object.assign({ name: name, mimeType: MIME_S, parents: [], driveId: 'DR1', trashed: false }, o);
+const driveH = (files) => harness.build({ drive: { files: files } });
+const FOLDER = () => ({ FO: DF('現場シート', { mimeType: MIME_F, parents: ['DR1'] }) });
+
+test('harness_selftest_list_order_and_not_found', () => {
+  const h = driveH({
+    FO: DF('現場シート', { mimeType: MIME_F, parents: ['DR1'] }),
+    a: DF('a', { parents: ['FO'], modifiedTime: '2026-01-01T00:00:00.000Z' }),
+    b: DF('b', { parents: ['FO'], modifiedTime: '2026-03-01T00:00:00.000Z' }),
+    c: DF('c', { parents: ['FO'], modifiedTime: '2026-02-01T00:00:00.000Z' })
+  });
+  const SA = { supportsAllDrives: true, includeItemsFromAllDrives: true };
+  let r = h.ctx.Drive.Files.list(Object.assign({ q: "'FO' in parents and trashed=false", orderBy: 'modifiedTime desc', fields: 'files(id)' }, SA));
+  ok(r.files.map(f => f.id).join() === 'b,c,a', 'list: modifiedTime desc で新しい順');
+  r = h.ctx.Drive.Files.list(Object.assign({ q: "'FO' in parents and trashed=false", orderBy: 'modifiedTime desc', pageSize: 2, fields: 'files(id)' }, SA));
+  ok(r.files.map(f => f.id).join() === 'b,c', 'list: pageSize で切り詰める(新しい順の先頭から)');
+  let msg = ''; try { h.ctx.Drive.Files.get('nope', { supportsAllDrives: true, fields: 'parents' }); } catch (e) { msg = e.message; }
+  ok(/File not found/.test(msg), 'get: 未知のIDは File not found');
+});
+
+// ---- license_siteFolder_ ----
+test('folder_found', () => {
+  const h = driveH(FOLDER());
+  const r = h.ctx.license_siteFolder_('DR1');
+  ok(r.ok === true && r.folderId === 'FO', '直下の現場シートが1つ → ok(' + JSON.stringify(r) + ')');
+  ok(h.cache.has('lk_folder_DR1'), 'フォルダIDを lk_folder_<driveId> に覚える');
+});
+test('folder_missing', () => {
+  const h = driveH({});
+  const r = h.ctx.license_siteFolder_('DR1');
+  ok(r.ok === false && r.reason === 'no_folder' && r.message === EXPECTED_MSG.no_folder, '0件 → no_folder(' + JSON.stringify(r) + ')');
+  ok(!h.cache.has('lk_folder_DR1'), '失敗は覚えない');
+});
+test('folder_two', () => {
+  const f = FOLDER(); f.FO2 = DF('現場シート', { mimeType: MIME_F, parents: ['DR1'] });
+  const h = driveH(f);
+  const r = h.ctx.license_siteFolder_('DR1');
+  ok(r.ok === false && r.reason === 'two_folders' && r.message === EXPECTED_MSG.two_folders, '2件 → two_folders(' + JSON.stringify(r) + ')');
+  ok(!h.cache.has('lk_folder_DR1'), '重複は覚えない');
+  // 重複を消したら直ちに ok（失敗は覚えていない）
+  delete h.drive.files.FO2;
+  const r2 = h.ctx.license_siteFolder_('DR1');
+  ok(r2.ok === true && r2.folderId === 'FO', '重複を消した直後に ok');
+});
+test('folder_nested_ignored', () => {
+  const h = driveH({
+    SUB: DF('その他', { mimeType: MIME_F, parents: ['DR1'] }),
+    NEST: DF('現場シート', { mimeType: MIME_F, parents: ['SUB'] }),
+    NOTFOLDER: DF('現場シート', { parents: ['DR1'] }),                       // 同名でもフォルダでなければ数えない
+    TRASH: DF('現場シート', { mimeType: MIME_F, parents: ['DR1'], trashed: true })   // ゴミ箱も数えない
+  });
+  const r = h.ctx.license_siteFolder_('DR1');
+  ok(r.ok === false && r.reason === 'no_folder', '入れ子・非フォルダ・ゴミ箱の現場シートは無視 → no_folder(' + JSON.stringify(r) + ')');
+});
+test('folder_cached_6h', () => {
+  const h = driveH(FOLDER());
+  h.ctx.license_siteFolder_('DR1');
+  const l1 = h.calls.driveList;
+  h.clock.advance(6 * 3600 * 1000 - 1000);
+  const r = h.ctx.license_siteFolder_('DR1');
+  ok(r.ok === true && r.folderId === 'FO' && h.calls.driveList === l1, '6時間以内は Drive.Files.list を呼ばない');
+  h.clock.advance(2000);
+  h.ctx.license_siteFolder_('DR1');
+  ok(h.calls.driveList === l1 + 1, '6時間を過ぎたら呼び直す');
+});
+test('folder_drive_error_cached_ok', () => {
+  const h = driveH(FOLDER());
+  h.cache.set('lk_folder_DR1', { v: 'FO', exp: h.clock.now() + 3600 * 1000 });
+  h.failDrive = true;
+  const r = h.ctx.license_siteFolder_('DR1');
+  ok(r.ok === true && r.folderId === 'FO', 'キャッシュがあれば Drive が失敗しても ok(' + JSON.stringify(r) + ')');
+  ok(h.calls.driveList === 0, 'キャッシュ命中なら Drive を呼ばない');
+});
+test('folder_drive_error_without_cache_unavailable', () => {
+  const h = driveH(FOLDER());
+  h.failDrive = true;
+  const r = h.ctx.license_siteFolder_('DR1');
+  ok(r.ok === false && r.reason === 'ledger_unavailable' && r.message === EXPECTED_MSG.ledger_unavailable, 'キャッシュ無し＋Drive失敗 → ledger_unavailable(' + JSON.stringify(r) + ')');
+});
+test('folder_list_args', () => {
+  const h = driveH(FOLDER());
+  let seen = null; const orig = h.ctx.Drive.Files.list;
+  h.ctx.Drive.Files.list = (p) => { seen = p; return orig(p); };
+  h.ctx.license_siteFolder_('DR1');
+  ok(seen && seen.q === "name='現場シート' and mimeType='application/vnd.google-apps.folder' and 'DR1' in parents and trashed=false", 'q が SPEC どおり(' + (seen && seen.q) + ')');
+  ok(seen.corpora === 'drive' && seen.driveId === 'DR1' && seen.includeItemsFromAllDrives === true && seen.supportsAllDrives === true, 'corpora/driveId/フラグが SPEC どおり');
+});
+
+// ---- license_sheetAllowed_ ----
+const sheetEnv = () => driveH(Object.assign(FOLDER(), {
+  S1: DF('s1', { parents: ['FO'] }),
+  S2: DF('s2', { parents: ['OTHER'] }),
+  S3: DF('s3', { parents: ['FO'], trashed: true })
+}));
+test('sheet_inside', () => {
+  const h = sheetEnv();
+  const r = h.ctx.license_sheetAllowed_('S1', 'FO');
+  ok(r.ok === true, '中にある → ok(' + JSON.stringify(r) + ')');
+  ok(h.cache.has('lk_in_FO_S1'), 'lk_in_<folderId>_<sheetId> に覚える');
+});
+test('sheet_outside', () => {
+  const h = sheetEnv();
+  const r = h.ctx.license_sheetAllowed_('S2', 'FO');
+  ok(r.ok === false && r.reason === 'outside' && r.message === EXPECTED_MSG.outside, '外 → outside(' + JSON.stringify(r) + ')');
+});
+test('inside_cached_6h', () => {
+  const h = sheetEnv();
+  h.ctx.license_sheetAllowed_('S1', 'FO');
+  const g1 = h.calls.driveGet;
+  h.clock.advance(6 * 3600 * 1000 - 1000);
+  const r = h.ctx.license_sheetAllowed_('S1', 'FO');
+  ok(r.ok === true && h.calls.driveGet === g1, '2回目は Drive.Files.get を呼ばない');
+  h.clock.advance(2000);
+  h.ctx.license_sheetAllowed_('S1', 'FO');
+  ok(h.calls.driveGet === g1 + 1, '6時間を過ぎたら確かめ直す');
+});
+test('outside_not_cached', () => {
+  const h = sheetEnv();
+  const r1 = h.ctx.license_sheetAllowed_('S2', 'FO');
+  ok(r1.ok === false, '最初は外');
+  ok(![...h.cache.keys()].some(k => k.indexOf('lk_in_') === 0), '外は覚えない');
+  h.drive.files.S2.parents = ['FO'];   // 現場シートへ移した
+  const r2 = h.ctx.license_sheetAllowed_('S2', 'FO');
+  ok(r2.ok === true, '移した直後にすぐ ok(' + JSON.stringify(r2) + ')');
+});
+test('trashed_is_outside', () => {
+  const h = sheetEnv();
+  const r = h.ctx.license_sheetAllowed_('S3', 'FO');
+  ok(r.ok === false && r.reason === 'outside', 'ゴミ箱の中は outside(' + JSON.stringify(r) + ')');
+  ok(!h.cache.has('lk_in_FO_S3'), 'ゴミ箱は覚えない');
+  // 一度「中」と覚えた後でも、期限内はキャッシュで通る（6時間の仕様）。ここでは覚える前の判定だけ確かめる
+});
+test('sheet_not_found_is_outside', () => {
+  const h = sheetEnv();
+  const r = h.ctx.license_sheetAllowed_('NOPE', 'FO');
+  ok(r.ok === false && r.reason === 'outside', 'Drive の File not found → outside(' + JSON.stringify(r) + ')');
+  const h2 = sheetEnv();
+  h2.ctx.Drive.Files.get = () => { throw new Error('API call to drive.files.get failed with error: FILE NOT FOUND: xyz'); };
+  ok(h2.ctx.license_sheetAllowed_('X', 'FO').reason === 'outside', '大文字小文字を問わず not found → outside');
+  ok(![...h.cache.keys()].some(k => k.indexOf('lk_in_') === 0), 'not found も覚えない');
+});
+test('drive_error_with_cache_ok', () => {
+  const h = sheetEnv();
+  h.ctx.license_sheetAllowed_('S1', 'FO');   // 中と覚える
+  h.failDrive = true;
+  const g1 = h.calls.driveGet;
+  const r = h.ctx.license_sheetAllowed_('S1', 'FO');
+  ok(r.ok === true && h.calls.driveGet === g1, 'Drive が壊れていても、覚えた「中」で通る(' + JSON.stringify(r) + ')');
+});
+test('drive_error_without_cache_unavailable', () => {
+  const h = sheetEnv();
+  h.failDrive = true;
+  const r = h.ctx.license_sheetAllowed_('S1', 'FO');
+  ok(r.ok === false && r.reason === 'ledger_unavailable' && r.message === EXPECTED_MSG.ledger_unavailable, '覚えが無く Drive 失敗 → ledger_unavailable(' + JSON.stringify(r) + ')');
+  ok(![...h.cache.keys()].some(k => k.indexOf('lk_in_') === 0), '失敗は覚えない');
+});
+test('sheet_get_args', () => {
+  const h = sheetEnv();
+  let seen = null, sid = null; const orig = h.ctx.Drive.Files.get;
+  h.ctx.Drive.Files.get = (id, p) => { sid = id; seen = p; return orig(id, p); };
+  h.ctx.license_sheetAllowed_('S1', 'FO');
+  ok(sid === 'S1' && seen.supportsAllDrives === true && seen.fields === 'parents,trashed', 'get の引数が SPEC どおり');
+});
+
+// ---- license_listSites_ ----
+test('list_sorted_new_first_max100', () => {
+  const files = FOLDER();
+  for (let i = 0; i < 120; i++) {
+    files['sp' + i] = DF('現場' + i, { parents: ['FO'], modifiedTime: new Date(Date.UTC(2026, 0, 1) + i * 3600 * 1000).toISOString() });
+  }
+  files.fold = DF('子フォルダ', { mimeType: MIME_F, parents: ['FO'], modifiedTime: '2027-01-01T00:00:00.000Z' });   // スプレッドシート以外は出ない
+  files.doc = DF('書類', { mimeType: 'application/vnd.google-apps.document', parents: ['FO'], modifiedTime: '2027-01-01T00:00:00.000Z' });
+  files.trash = DF('ゴミ', { parents: ['FO'], trashed: true, modifiedTime: '2027-02-01T00:00:00.000Z' });
+  files.other = DF('別の置き場', { parents: ['ELSE'], modifiedTime: '2027-03-01T00:00:00.000Z' });
+  const h = driveH(files);
+  const r = h.ctx.license_listSites_('FO');
+  ok(r.length === 100, '最大100件(' + r.length + ')');
+  ok(r[0].id === 'sp119' && r[0].name === '現場119' && r[99].id === 'sp20', '更新の新しい順(先頭 ' + r[0].id + ' / 末尾 ' + r[99].id + ')');
+  ok(r[0].modified === Date.UTC(2026, 0, 1) + 119 * 3600 * 1000, 'modified は epoch ms(' + r[0].modified + ')');
+  ok(r.every(x => x.id.indexOf('sp') === 0), 'フォルダ・書類・ゴミ箱・別の置き場は出ない');
+  ok(Object.keys(r[0]).sort().join() === 'id,modified,name', '返す項目は id,name,modified');
+});
+test('list_args_and_empty', () => {
+  const h = driveH(FOLDER());
+  let seen = null; const orig = h.ctx.Drive.Files.list;
+  h.ctx.Drive.Files.list = (p) => { seen = p; return orig(p); };
+  const r = h.ctx.license_listSites_('FO');
+  ok(Array.isArray(r) && r.length === 0, '空なら []');
+  ok(seen.q === "'FO' in parents and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false", 'q が SPEC どおり');
+  ok(seen.corpora === 'allDrives' && seen.orderBy === 'modifiedTime desc' && seen.pageSize === 100 && seen.includeItemsFromAllDrives === true && seen.supportsAllDrives === true, '引数が SPEC どおり');
+});
+
+test('appsscript_drive_service', () => {
+  const j = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, '..', 'appsscript.json'), 'utf8'));
+  ok(JSON.stringify(j.dependencies.enabledAdvancedServices) === JSON.stringify([{ userSymbol: 'Drive', serviceId: 'drive', version: 'v3' }]), 'Drive v3 を高度なサービスに');
+  ok(j.timeZone === 'Asia/Tokyo' && j.runtimeVersion === 'V8' && j.exceptionLogging === 'STACKDRIVER' && j.webapp.access === 'ANYONE_ANONYMOUS', '既存のキーは変えない');
+});
+
+
 for (const [name, fn] of tests) {
   try { fn(); } catch (e) { ok(false, name + ' が例外: ' + (e && e.stack || e)); }
 }

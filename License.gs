@@ -340,3 +340,78 @@ function license_touchDevice_(key, entry, deviceId, deviceName, appVersion, verd
   }
   return res;
 }
+
+// ---- 現場シートフォルダ・シートの所属・一覧（Drive API v3 の高度なサービス） ----
+
+const LICENSE_SITE_FOLDER_NAME_ = '現場シート';
+const LICENSE_FOLDER_CACHE_SEC_ = 21600;   // フォルダID・「中にある」は6時間(CacheService の上限)
+const LICENSE_LIST_MAX_ = 100;
+
+// Drive の q に埋め込む文字列の ' と \ を逃がす
+function license_q_(s) { return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
+
+// 会社の共有ドライブ直下の「現場シート」フォルダを探す。
+// 1つ → {ok:true, folderId}（6時間覚える）／0 → no_folder／2つ以上 → two_folders（成功だけ覚える＝作った・消した直後にすぐ効く）。
+// 入れ子（親が共有ドライブ直下でない）の「現場シート」は q の in parents で外れる。
+// v3.35: Drive が失敗したら、覚えがあればそれで通し、無ければ ledger_unavailable
+function license_siteFolder_(driveId) {
+  const cache = CacheService.getScriptCache();
+  const ckey = 'lk_folder_' + driveId;
+  let hit = null;
+  try { hit = cache.get(ckey); } catch (e) { Logger.log('フォルダ札の読み込み失敗: ' + e); }
+  if (hit) return { ok: true, folderId: hit };
+  let res;
+  try {
+    res = Drive.Files.list({
+      q: "name='" + LICENSE_SITE_FOLDER_NAME_ + "' and mimeType='application/vnd.google-apps.folder' and '" + license_q_(driveId) + "' in parents and trashed=false",
+      corpora: 'drive', driveId: driveId, includeItemsFromAllDrives: true, supportsAllDrives: true,
+      fields: 'files(id,name)'
+    });
+  } catch (e) {
+    Logger.log('現場シートフォルダを探せない: ' + e);
+    return { ok: false, reason: 'ledger_unavailable', message: LICENSE_MSG_.ledger_unavailable };
+  }
+  const files = (res && res.files) || [];
+  if (files.length === 0) return { ok: false, reason: 'no_folder', message: LICENSE_MSG_.no_folder };
+  if (files.length >= 2) return { ok: false, reason: 'two_folders', message: LICENSE_MSG_.two_folders };
+  try { cache.put(ckey, files[0].id, LICENSE_FOLDER_CACHE_SEC_); } catch (e) { Logger.log('フォルダ札の保存失敗: ' + e); }
+  return { ok: true, folderId: files[0].id };
+}
+
+// スプレッドシートが folderId の直下にあるか。
+// 中(ゴミ箱でない) → ok（6時間覚える。覚えがあれば Drive を呼ばない）。外・ゴミ箱・「見つからない」→ outside（覚えない＝移した直後にすぐ開ける）。
+// それ以外の Drive の失敗 → ledger_unavailable（覚えが先に効くので「中」の覚えがあれば通る）
+function license_sheetAllowed_(spreadsheetId, folderId) {
+  const cache = CacheService.getScriptCache();
+  const ckey = 'lk_in_' + folderId + '_' + spreadsheetId;
+  let hit = null;
+  try { hit = cache.get(ckey); } catch (e) { Logger.log('所属札の読み込み失敗: ' + e); }
+  if (hit) return { ok: true };
+  let f;
+  try {
+    f = Drive.Files.get(spreadsheetId, { supportsAllDrives: true, fields: 'parents,trashed' });
+  } catch (e) {
+    if (/not found/i.test(String((e && e.message) || e))) return { ok: false, reason: 'outside', message: LICENSE_MSG_.outside };
+    Logger.log('シートの所属を確かめられない: ' + e);
+    return { ok: false, reason: 'ledger_unavailable', message: LICENSE_MSG_.ledger_unavailable };
+  }
+  const inside = !!f && !f.trashed && (f.parents || []).indexOf(folderId) >= 0;
+  if (!inside) return { ok: false, reason: 'outside', message: LICENSE_MSG_.outside };
+  try { cache.put(ckey, '1', LICENSE_FOLDER_CACHE_SEC_); } catch (e) { Logger.log('所属札の保存失敗: ' + e); }
+  return { ok: true };
+}
+
+// 現場シートフォルダの直下のスプレッドシートを更新の新しい順に最大100件。[{id, name, modified(epoch ms)}]
+// Drive の失敗は例外のまま返す（呼び出し側が ledger_unavailable にする）
+function license_listSites_(folderId) {
+  const res = Drive.Files.list({
+    q: "'" + license_q_(folderId) + "' in parents and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
+    corpora: 'allDrives', includeItemsFromAllDrives: true, supportsAllDrives: true,
+    orderBy: 'modifiedTime desc', pageSize: LICENSE_LIST_MAX_,
+    fields: 'files(id,name,modifiedTime)'
+  });
+  return ((res && res.files) || []).slice(0, LICENSE_LIST_MAX_).map(function (f) {
+    const t = Date.parse(f.modifiedTime);
+    return { id: f.id, name: f.name, modified: isNaN(t) ? 0 : t };
+  });
+}
