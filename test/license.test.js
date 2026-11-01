@@ -1176,8 +1176,41 @@ test('busy_answer_shape', () => {
   ok(gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' })).ok === true, '登録のため1回通す');
   h.lockBusy = true;
   const r = gpost(h, REQ({ action: 'handleScan', spreadsheetId: 'SIN' }));
-  ok(r.ok === false && r.message === EXPECTED_MSG.busy && Object.keys(r).sort().join() === 'message,ok', '混み合い時の応答は {ok:false, message} のみ(' + JSON.stringify(r) + ')');
+  ok(r.ok === false && r.message === EXPECTED_MSG.busy && r.reason === 'busy' && Object.keys(r).sort().join() === 'message,ok,reason', '混み合い時の応答は {ok:false, reason:busy, message}(' + JSON.stringify(r) + ')');
   ok(ran === 1, '混み合っていれば処理は走らない');
+});
+
+
+// ---- Task 6 修正1：レビュー指摘 ----
+test('script_lock_busy_answer_is_json', () => {
+  const h = gateEnv({ real: true });
+  let ran = 0;
+  h.ctx.setLabelSiteName = () => { ran++; return { ok: true }; };
+  h.ctx.addWorker = () => { ran++; return { ok: true }; };
+  h.ctx.getWorkerList = () => ({ ok: true });
+  ok(gpost(h, REQ({ action: 'getWorkerList' })).ok === true, '先に端末を登録しておく（ゲートの busy と区別するため）');
+  h.lockBusy = true;
+  for (const a of ['setLabelSiteName', 'addWorker']) {
+    const r = gpost(h, REQ({ action: a, spreadsheetId: 'SIN', name: 'x' }));
+    ok(r.ok === false && r.reason === 'busy' && r.message === EXPECTED_MSG.busy && Object.keys(r).sort().join() === 'message,ok,reason', a + ': ScriptLock が混み合うと JSON の busy(' + JSON.stringify(r) + ')');
+  }
+  ok(ran === 0, '処理は走らない');
+});
+test('checkLicense_key_ledger_unavailable_has_grace', () => {
+  const h = gateEnv();
+  h.failOpen.add(LEDGER_ID);
+  const r = gpost(h, REQ({ action: 'checkLicense' }));
+  ok(r.ok === false && r.reason === 'ledger_unavailable' && r.inGrace === true && r.daysLeft === null, 'ledger_unavailable にも inGrace:true / daysLeft:null(' + JSON.stringify(r) + ')');
+});
+test('whitespace_device_id_refused_no_device', () => {
+  const h = gateEnv();
+  for (const a of ['handleScan', 'getWorkerList', 'checkLicense']) {
+    const r = gpost(h, REQ({ action: a, spreadsheetId: 'SIN', deviceId: '   ' }));
+    ok(r.ok === false && r.reason === 'no_device', a + ': 空白だけの端末IDは no_device(' + JSON.stringify(r) + ')');
+  }
+  ok(usageTab(h) === undefined, '空の端末を登録しない');
+  const r2 = gpost(h, REQ({ action: 'getWorkerList', deviceId: ' DEV1 ' }));
+  ok(r2.ok === true && usageTab(h).rows[1][2] === 'DEV1', '前後の空白は取って登録');
 });
 
 

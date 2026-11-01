@@ -452,6 +452,7 @@ function license_gate_(action, p, now) {
 
   const deny = (reason, message) => ({ allow: false, response: license_refuse_(reason, message) });
   const key = String(p.licenseKey == null ? '' : p.licenseKey).trim();
+  const deviceId = String(p.deviceId == null ? '' : p.deviceId).trim();   // 空白だけの端末IDは「無い」(no_device)
 
   if (!key) {
     if (isList) return deny('no_key');   // 一覧は猶予中でもキーが要る
@@ -462,7 +463,7 @@ function license_gate_(action, p, now) {
 
   const ledger = license_ledger_(now);
   if (!ledger) return deny('ledger_unavailable');
-  const ck = license_checkKey_(ledger, key, p.deviceId, now);
+  const ck = license_checkKey_(ledger, key, deviceId, now);
   if (!ck.ok) return deny(ck.reason, ck.message);
 
   let id = '';
@@ -471,7 +472,7 @@ function license_gate_(action, p, now) {
     if (!id) return deny('outside');
   }
 
-  const t = license_touchDevice_(ck.key, ck.entry, p.deviceId, String(p.deviceName || ''), String(p.appVersion || ''), '有効', now);
+  const t = license_touchDevice_(ck.key, ck.entry, deviceId, String(p.deviceName || ''), String(p.appVersion || ''), '有効', now);
   if (!t.ok) return deny(t.reason, t.message);
   if (!isSheet && !isList) return { allow: true, company: ck.entry.company };
 
@@ -492,11 +493,12 @@ function license_checkLicenseAction_(p, now) {
   const ledger = license_ledger_(now);
   const g = license_grace_(ledger, now);
   const withGrace = (r) => { r.inGrace = g.inGrace; r.daysLeft = g.daysLeft; return r; };
+  const deviceId = String(p.deviceId == null ? '' : p.deviceId).trim();
   if (!key) return withGrace(license_refuse_('no_key'));
-  if (!ledger) return license_refuse_('ledger_unavailable');
-  const ck = license_checkKey_(ledger, key, p.deviceId, now);
+  if (!ledger) return withGrace(license_refuse_('ledger_unavailable'));
+  const ck = license_checkKey_(ledger, key, deviceId, now);
   if (!ck.ok) return withGrace(license_refuse_(ck.reason, ck.message));
-  const t = license_touchDevice_(ck.key, ck.entry, p.deviceId, String(p.deviceName || ''), String(p.appVersion || ''), '有効', now);
+  const t = license_touchDevice_(ck.key, ck.entry, deviceId, String(p.deviceName || ''), String(p.appVersion || ''), '有効', now);
   if (!t.ok) return withGrace(license_refuse_(t.reason, t.message));
   return { ok: true, companyName: ck.entry.company, expires: ck.entry.expires, used: t.used, limit: t.limit, inGrace: g.inGrace, daysLeft: g.daysLeft };
 }

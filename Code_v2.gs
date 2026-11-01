@@ -421,7 +421,8 @@ const WRITE_ACTIONS_ = {
 function withWriteLock_(fn) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(30000)) {
-    return { ok: false, message: 'サーバーが混み合っています。少し待ってからもう一度読んでください（記録はされていません）' };
+    // v3.35: 順番待ちの混み合い応答はどれも同じ形 {ok:false, reason:'busy', message} (アプリが reason で分けられる)
+    return { ok: false, reason: 'busy', message: LICENSE_MSG_.busy };
   }
   try {
     return fn();
@@ -471,12 +472,14 @@ function doPost(e) {
       const sid = parseSpreadsheetIdFromInput(p.spreadsheetId);
       if (sid) {
         return license_withSheetLock_('lk_' + sid, function() { return doPostAction_(action, p, respond); },
-          function() { return respond({ ok: false, message: LICENSE_MSG_.busy }); });
+          function() { return respond({ ok: false, reason: 'busy', message: LICENSE_MSG_.busy }); });
       }
       return doPostAction_(action, p, respond);   // IDが無ければ書く先が無い (action 側が未設定エラーを返す)
     }
     if (Object.prototype.hasOwnProperty.call(WRITE_ACTIONS_, action) && WRITE_ACTIONS_[action]) {
-      return withWriteLock_(function() { return doPostAction_(action, p, respond); });
+      // v3.35: 混み合い応答は素のオブジェクトで返ってくる (ContentService にならず非JSONの画面になっていた) ので respond を通す
+      const wr = withWriteLock_(function() { return doPostAction_(action, p, respond); });
+      return (wr && typeof wr.getContent === 'function') ? wr : respond(wr);
     }
     return doPostAction_(action, p, respond);
   } catch (err) {
