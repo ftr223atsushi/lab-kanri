@@ -1594,7 +1594,7 @@ test('every_action_is_gated_exactly_once', () => {
   ok(actions.length >= 18, 'case を読み取れた(' + actions.length + ')');
   const h = harness.build({});
   const SHEET = h.eval('LICENSE_SHEET_ACTIONS_'), PLAIN = h.eval('LICENSE_PLAIN_ACTIONS_'), WRITE = h.eval('LICENSE_WRITE_ACTIONS_');
-  const SELF = { ping: true, checkLicense: true, listSites: true };
+  const SELF = { ping: true, checkLicense: true, listSites: true, listSiteTitles: true };
   const own = (t, a) => Object.prototype.hasOwnProperty.call(t, a) && t[a] === true;
   for (const a of actions) {
     const n = [SHEET, PLAIN, SELF].filter(t => own(t, a)).length;
@@ -1603,6 +1603,67 @@ test('every_action_is_gated_exactly_once', () => {
   for (const a of Object.keys(SHEET).concat(Object.keys(PLAIN))) ok(actions.includes(a), '表の「' + a + '」は doPostAction_ にある');
   for (const a of Object.keys(WRITE)) ok(own(SHEET, a), '行を足す「' + a + '」はシートの action でもある');
   for (const a of Object.keys(SELF)) ok(!own(SHEET, a) && !own(PLAIN, a), a + ' は判定の表に入れない');
+});
+
+// ---- v3.39：現場切替の一覧に出す正式な件名（件名タブの種別ごとの件名）----
+const KENMEI_ROWS = (o) => [['件名', '旧畜産（通称）'], ['ラベル略件名', '旧畜産'], ['現場番号', ''], ['現場住所', ''],
+  ['件名(表層土壌)', o.soil || ''], ['件名(土壌ガス)', o.gas || ''], ['件名(配管・ピット・盛土下)', o.pipe || ''],
+  ['件名(深度調査)', o.depth || ''], ['件名(測量)', o.survey || ''], ['入場ルール', ''], ['入場ルール写真', ''], ['現場ID', 'BQYR']];
+const addBook = (h, id, tabs) => { h.books[id] = new harness.Book(id, tabs, h); };
+test('titles_read_kenmei_tab_and_cache', () => {
+  const h = harness.build({});
+  addBook(h, 'S1', { '件名': KENMEI_ROWS({ soil: '〇〇市 土壌汚染状況調査業務委託', depth: ' 〇〇市 詳細調査業務委託 ' }) });
+  addBook(h, 'S2', { '別のタブ': [['x']] });   // 件名タブが無い
+  const r = h.ctx.license_siteTitles_([{ id: 'S1' }, { id: 'S2' }]);
+  ok(JSON.stringify(r.titles.S1) === JSON.stringify({ soil: '〇〇市 土壌汚染状況調査業務委託', depth: '〇〇市 詳細調査業務委託' }), '入っている種別だけ・前後の空白を除く(' + JSON.stringify(r.titles.S1) + ')');
+  ok(JSON.stringify(r.titles.S2) === '{}', '件名タブが無いシートは空(' + JSON.stringify(r.titles.S2) + ')');
+  ok(r.partial === false, '全部読めた');
+  const opened = h.calls.openById;
+  const r2 = h.ctx.license_siteTitles_([{ id: 'S1' }, { id: 'S2' }]);
+  ok(h.calls.openById === opened, '2回目は覚えた答えを使い、シートを開かない');
+  ok(JSON.stringify(r2.titles) === JSON.stringify(r.titles), '2回目も同じ答え');
+  h.clock.advance(21600 * 1000 + 1);
+  h.ctx.license_siteTitles_([{ id: 'S1' }]);
+  ok(h.calls.openById === opened + 1, '6時間たったら読み直す');
+});
+test('titles_open_failure_skipped_not_cached', () => {
+  const h = harness.build({});
+  addBook(h, 'S1', { '件名': KENMEI_ROWS({ soil: 'A' }) });
+  h.failOpen.add('S1');
+  const r = h.ctx.license_siteTitles_([{ id: 'S1' }]);
+  ok(!('S1' in r.titles) && r.partial === false, '開けないシートは答えに入れない(' + JSON.stringify(r) + ')');
+  h.failOpen.delete('S1');
+  const r2 = h.ctx.license_siteTitles_([{ id: 'S1' }]);
+  ok(r2.titles.S1 && r2.titles.S1.soil === 'A', '失敗は覚えず、次は読める');
+});
+test('titles_time_budget_partial_then_continue', () => {
+  const h = harness.build({});
+  const ids = ['S1', 'S2', 'S3', 'S4'];
+  ids.forEach((id, i) => addBook(h, id, { '件名': KENMEI_ROWS({ soil: '件名' + i }) }));
+  const orig = h.ctx.SpreadsheetApp.openById;
+  h.ctx.SpreadsheetApp.openById = (id) => { h.clock.advance(8000); return orig(id); };   // 1つ開くのに8秒
+  const r = h.ctx.license_siteTitles_(ids.map(id => ({ id })));
+  ok(r.partial === true && Object.keys(r.titles).length === 3, '20秒を越えたら打ち切る（8秒×3で24秒・3件）(' + Object.keys(r.titles) + ')');
+  const r2 = h.ctx.license_siteTitles_(ids.map(id => ({ id })));
+  ok(r2.partial === false && Object.keys(r2.titles).length === 4 && r2.titles.S4.soil === '件名3', '次の呼び出しで残りを読む');
+});
+test('listSiteTitles_gated_and_folder_only', () => {
+  const h = gateEnv({ real: true });
+  addBook(h, 'SIN', { '件名': KENMEI_ROWS({ soil: '表層の正式件名', gas: '表層の正式件名', depth: '深度の正式件名' }) });
+  addBook(h, 'SOUT', { '件名': KENMEI_ROWS({ soil: '外のシート' }) });
+  const r0 = gpost(h, { action: 'listSiteTitles' });
+  ok(r0.ok === false && r0.reason === 'no_key', 'キーが無ければ no_key(' + JSON.stringify(r0) + ')');
+  const r = gpost(h, REQ({ action: 'listSiteTitles' }));
+  ok(r.ok === true && r.partial === false, 'ok(' + JSON.stringify(r) + ')');
+  ok(Object.keys(r.titles).join() === 'SIN', 'フォルダ直下のシートだけ読む(' + Object.keys(r.titles) + ')');
+  ok(r.titles.SIN.soil === '表層の正式件名' && r.titles.SIN.depth === '深度の正式件名' && r.titles.SIN.gas === '表層の正式件名', '種別ごとの件名(' + JSON.stringify(r.titles.SIN) + ')');
+});
+test('listSiteTitles_drive_error_unavailable', () => {
+  const h = gateEnv({ real: true });
+  h.ctx.license_siteFolder_(GDR);
+  h.failDrive = true;
+  const r = gpost(h, REQ({ action: 'listSiteTitles' }));
+  ok(r.ok === false && r.reason === 'ledger_unavailable', '一覧の Drive 失敗は ledger_unavailable(' + JSON.stringify(r) + ')');
 });
 
 for (const [name, fn] of tests) {

@@ -145,6 +145,8 @@ function build(opts) {
   h.cache = cacheMap;   // key -> {v, exp}
   const cache = {
     get(k) { calls.cacheGet++; const e = cacheMap.get(k); if (!e) return null; if (e.exp <= clock.now()) { cacheMap.delete(k); return null; } return e.v; },
+    // 本物と同じく、見つかったキーだけを持つオブジェクトを返す（呼び出し1回）
+    getAll(keys) { calls.cacheGet++; const o = {}; for (const k of keys || []) { const e = cacheMap.get(k); if (e && e.exp > clock.now()) o[k] = e.v; } return o; },
     // 本物の上限：寿命は最長21600秒(6時間)・値は100KB・キーは250字。超えたら本物と同じく例外にする
     put(k, v, sec) {
       calls.cachePut++;

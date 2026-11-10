@@ -34,7 +34,7 @@
 // ========== バージョン ==========
 // 形式: メジャー.マイナー-yyyyMMdd.HHmm (更新ごとに 0.01 上げ、日時はデプロイ日時)
 // APK 側 (index.html の APP_VERSION) と揃えること
-const APP_VERSION = '3.38-20261102.1100';
+const APP_VERSION = '3.39-20261110.2306';
 
 // ========== アプリの更新案内 ==========
 // ドライブに置いた最新APKの直リンクをここに書く。空なら案内は出ない。
@@ -461,14 +461,17 @@ function doPost(e) {
     if (gate.notice) notice = gate.notice;
 
     if (action === 'checkLicense') return respond(license_checkLicenseAction_(p, now));
-    if (action === 'listSites') {
+    if (action === 'listSites' || action === 'listSiteTitles') {
       let sites;
       try { sites = license_listSites_(gate.folderId); }
       catch (err) {
         Logger.log('現場シートの一覧を読めない: ' + err);
         return respond(license_refuse_('ledger_unavailable'));
       }
-      return respond({ ok: true, company: gate.company, sites: sites });
+      if (action === 'listSites') return respond({ ok: true, company: gate.company, sites: sites });
+      // v3.39: 一覧と同じシート（フォルダ直下）だけの正式な件名。アプリは一覧を出したあとにこれを呼んで書き足す
+      const tt = license_siteTitles_(sites);
+      return respond({ ok: true, titles: tt.titles, partial: tt.partial });
     }
     // 行を足す書き込み3種：シートごとの順番待ち (札のキー lk_<シートID>)。ScriptLock の withWriteLock_ とは重ねない
     // v3.35 Task 12d: handleScan はここを通らない (順番待ちなしで doPostAction_ へ)

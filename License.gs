@@ -478,6 +478,58 @@ function license_listSites_(folderId) {
   });
 }
 
+// v3.39: 現場切替の一覧に出す正式な件名。件名タブの種別ごとの件名（picker が書く「件名(表層土壌)」など）を読む。
+// シートを1つずつ開くので、読んだ答えはシートごとに6時間覚え、1回の呼び出しは約20秒で打ち切る（残りは次の呼び出しで読む）。
+// 件名を picker で直したときは、最長6時間で一覧に出る。
+const LICENSE_TITLE_CACHE_SEC_ = 21600;
+const LICENSE_TITLE_BUDGET_MS_ = 20000;
+const LICENSE_TITLE_KEYS_ = [['soil', '件名(表層土壌)'], ['gas', '件名(土壌ガス)'], ['pipe', '件名(配管・ピット・盛土下)'],
+                             ['depth', '件名(深度調査)'], ['survey', '件名(測量)']];
+
+// 1つのシートの件名 {soil?, gas?, pipe?, depth?, survey?}（空は省く）。件名タブが無ければ {}。開けないときは例外のまま返す
+// （getKenmeiMap_ は失敗を飲み込むので使わない：一時の失敗で空の答えを6時間覚えてしまうため）
+function license_readSiteTitle_(id) {
+  const sheet = SpreadsheetApp.openById(id).getSheetByName(SHEET_KENMEI);
+  const t = {};
+  if (!sheet) return t;
+  const lastRow = Math.min(sheet.getLastRow(), 20);
+  if (lastRow < 1) return t;
+  const map = {};
+  sheet.getRange(1, 1, lastRow, 2).getDisplayValues().forEach(function (r) {
+    const k = String(r[0] || '').trim();
+    if (k) map[k] = String(r[1] || '').trim();
+  });
+  LICENSE_TITLE_KEYS_.forEach(function (kv) { if (map[kv[1]]) t[kv[0]] = map[kv[1]]; });
+  return t;
+}
+
+// sites=[{id}]（license_listSites_ の答え）→ {titles: {id: {...}}, partial: 時間切れで読み残しがあれば true}
+// 開けないシートは答えに入れず、覚えもしない（次の呼び出しで読み直す）
+function license_siteTitles_(sites) {
+  const cache = CacheService.getScriptCache();
+  const list = (sites || []).filter(function (s) { return s && s.id; });
+  const keyOf = function (id) { return 'lk_title_' + id; };
+  let hits = {};
+  try { hits = cache.getAll(list.map(function (s) { return keyOf(s.id); })) || {}; }
+  catch (e) { Logger.log('件名の控えを読めず: ' + e); }
+  const titles = {};
+  let partial = false;
+  const start = new Date().getTime();
+  list.forEach(function (s) {
+    const hit = hits[keyOf(s.id)];
+    if (hit != null) {
+      try { titles[s.id] = JSON.parse(hit); return; } catch (e) { /* 壊れた控えは読み直す */ }
+    }
+    if (new Date().getTime() - start >= LICENSE_TITLE_BUDGET_MS_) { partial = true; return; }
+    let t;
+    try { t = license_readSiteTitle_(s.id); }
+    catch (e) { Logger.log('件名を読めない ' + s.id + ': ' + e); return; }
+    titles[s.id] = t;
+    try { cache.put(keyOf(s.id), JSON.stringify(t), LICENSE_TITLE_CACHE_SEC_); } catch (e) { Logger.log('件名の控えを置けず: ' + e); }
+  });
+  return { titles: titles, partial: partial };
+}
+
 // ---- 入口の判定と新しい action（SPEC 3-2・3-4）----
 
 // v3.35: 判定するのは「知っている action」だけ。知らない action は判定せず doPostAction_ に渡し、
@@ -544,7 +596,7 @@ function license_passPut_(ledger, key, deviceId, sheetId, company, folderId, now
 // 順番：キー無し→猶予 ／ (通過札があればここで通す) ／ キー→台帳→端末の登録→(シートの action だけ)置き場所。拒否は利用タブに書かない
 function license_gate_(action, p, now) {
   if (action === 'ping' || action === 'checkLicense') return { allow: true };   // ping は判定なし・checkLicense は自分で確かめる
-  const isList = action === 'listSites';
+  const isList = action === 'listSites' || action === 'listSiteTitles';   // v3.39: 件名の一覧も listSites と同じ判定
   const isSheet = license_has_(LICENSE_SHEET_ACTIONS_, action);
   if (!isList && !isSheet && !license_has_(LICENSE_PLAIN_ACTIONS_, action)) return { allow: true };   // 知らない action は素通し
 
