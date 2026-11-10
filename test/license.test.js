@@ -1626,15 +1626,20 @@ test('titles_read_kenmei_tab_and_cache', () => {
   h.ctx.license_siteTitles_([{ id: 'S1' }]);
   ok(h.calls.openById === opened + 1, '6時間たったら読み直す');
 });
-test('titles_open_failure_skipped_not_cached', () => {
+test('titles_open_failure_skipped_retry_after_10min', () => {
   const h = harness.build({});
   addBook(h, 'S1', { '件名': KENMEI_ROWS({ soil: 'A' }) });
   h.failOpen.add('S1');
   const r = h.ctx.license_siteTitles_([{ id: 'S1' }]);
   ok(!('S1' in r.titles) && r.partial === false, '開けないシートは答えに入れない(' + JSON.stringify(r) + ')');
+  const opened = h.calls.openById;
+  h.ctx.license_siteTitles_([{ id: 'S1' }]);
+  ok(h.calls.openById === opened, '開けなかったシートは10分間は開き直さない');
   h.failOpen.delete('S1');
+  h.clock.advance(600 * 1000 + 1);
   const r2 = h.ctx.license_siteTitles_([{ id: 'S1' }]);
-  ok(r2.titles.S1 && r2.titles.S1.soil === 'A', '失敗は覚えず、次は読める');
+  ok(r2.titles.S1 && r2.titles.S1.soil === 'A', '10分たったら読み直す');
+  ok(h.calls.openById === opened + 1, '読み直しは1回');
 });
 test('titles_time_budget_partial_then_continue', () => {
   const h = harness.build({});

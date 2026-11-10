@@ -483,6 +483,8 @@ function license_listSites_(folderId) {
 // 件名を picker で直したときは、最長6時間で一覧に出る。
 const LICENSE_TITLE_CACHE_SEC_ = 21600;
 const LICENSE_TITLE_BUDGET_MS_ = 20000;
+const LICENSE_TITLE_FAIL_SEC_ = 600;   // 開けなかったシートは10分間は開き直さない（ほかのシートの読み込みを遅らせないため）
+const LICENSE_TITLE_FAIL_MARK_ = '!';
 const LICENSE_TITLE_KEYS_ = [['soil', '件名(表層土壌)'], ['gas', '件名(土壌ガス)'], ['pipe', '件名(配管・ピット・盛土下)'],
                              ['depth', '件名(深度調査)'], ['survey', '件名(測量)']];
 
@@ -504,7 +506,7 @@ function license_readSiteTitle_(id) {
 }
 
 // sites=[{id}]（license_listSites_ の答え）→ {titles: {id: {...}}, partial: 時間切れで読み残しがあれば true}
-// 開けないシートは答えに入れず、覚えもしない（次の呼び出しで読み直す）
+// 開けないシートは答えに入れず、「開けなかった」印を10分だけ置く（その間は開き直さない）
 function license_siteTitles_(sites) {
   const cache = CacheService.getScriptCache();
   const list = (sites || []).filter(function (s) { return s && s.id; });
@@ -517,13 +519,18 @@ function license_siteTitles_(sites) {
   const start = new Date().getTime();
   list.forEach(function (s) {
     const hit = hits[keyOf(s.id)];
+    if (hit === LICENSE_TITLE_FAIL_MARK_) return;
     if (hit != null) {
       try { titles[s.id] = JSON.parse(hit); return; } catch (e) { /* 壊れた控えは読み直す */ }
     }
     if (new Date().getTime() - start >= LICENSE_TITLE_BUDGET_MS_) { partial = true; return; }
     let t;
     try { t = license_readSiteTitle_(s.id); }
-    catch (e) { Logger.log('件名を読めない ' + s.id + ': ' + e); return; }
+    catch (e) {
+      Logger.log('件名を読めない ' + s.id + ': ' + e);
+      try { cache.put(keyOf(s.id), LICENSE_TITLE_FAIL_MARK_, LICENSE_TITLE_FAIL_SEC_); } catch (e2) {}
+      return;
+    }
     titles[s.id] = t;
     try { cache.put(keyOf(s.id), JSON.stringify(t), LICENSE_TITLE_CACHE_SEC_); } catch (e) { Logger.log('件名の控えを置けず: ' + e); }
   });
