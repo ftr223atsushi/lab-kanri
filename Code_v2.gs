@@ -2199,10 +2199,39 @@ function getSaishuAll(spreadsheetId) {
     Object.keys(kindMap).forEach(function(apkKey) {
       result[apkKey] = readKindWorkRows_(ss, kindMap[apkKey], labMap);
     });
-    return { ok: true, kinds: result };
+    // v3.40: 深度の穴の「実際に掘った深さ」(掘削完了タブの検測)。現地確認の「残り」で、浅く止めた穴の
+    //        予定より深い袋を数えないために使う。古いアプリは知らない項目を無視する
+    return { ok: true, kinds: result, depthDone: readDepthDone_(ss) };
   } catch (e) {
     return { ok: false, message: 'エラー: ' + e.message };
   }
+}
+
+/**
+ * v3.40: shast が書く「掘削完了」タブ（1地点1行）から {地点: 検測の文字列} を返す。
+ * 見出しは1行目から名前（地点・検測・状態）で引く。状態「削除」と地点が空の行は除く。
+ * タブが無い・読めないときは {}（現地確認の残りは予定の袋を全部数える）。
+ */
+function readDepthDone_(ss) {
+  const out = {};
+  try {
+    const sheet = ss.getSheetByName('掘削完了');
+    if (!sheet) return out;
+    const lastRow = sheet.getLastRow();
+    const lastCol = sheet.getLastColumn();
+    if (lastRow < 2 || lastCol < 1) return out;
+    const v = sheet.getRange(1, 1, lastRow, lastCol).getDisplayValues();
+    const head = v[0].map(function(h) { return String(h || '').trim(); });
+    const iPt = head.indexOf('地点'), iKen = head.indexOf('検測'), iSt = head.indexOf('状態');
+    if (iPt < 0 || iKen < 0) return out;
+    for (let r = 1; r < v.length; r++) {
+      const pt = String(v[r][iPt] || '').trim();
+      if (!pt) continue;
+      if (iSt >= 0 && String(v[r][iSt] || '').trim() === '削除') continue;
+      out[pt] = String(v[r][iKen] || '').trim();
+    }
+  } catch (e) {}
+  return out;
 }
 
 /**
