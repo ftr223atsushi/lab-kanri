@@ -40,6 +40,7 @@ class Sheet {
   set(r, c, v) { this.log.push(r + ',' + c); while (this.rows.length < r) this.rows.push([]); const row = this.rows[r - 1]; while (row.length < c) row.push(''); row[c - 1] = v; }
   getLastRow() { return this.rows.length; }
   getLastColumn() { return Math.max(0, ...this.rows.map(r => r.length)); }
+  getMaxColumns() { return this.getLastColumn(); }   // v3.40: readKindWorkRows_ が使う（本物は表の列数。模擬は使っている列数）
   getRange(r, c, nr = 1, nc = 1) {
     if (typeof r === 'string') {   // 'B12' のような A1 表記（1セルだけ）
       const m = r.match(/^([A-Z]+)(\d+)$/);

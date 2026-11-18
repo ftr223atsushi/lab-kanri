@@ -28,6 +28,19 @@ test('depth_done_header_order', () => {
   ok(JSON.stringify(r.depthDone) === JSON.stringify({ C1: '7.5', C2: '' }), '見出しの名前で引く(' + JSON.stringify(r.depthDone) + ')');
 });
 
+test('kinds_report_hasGenchi', () => {
+  const head = ['状態', '地点', '上下', 'コード', '採取日時', '採取担当', '現地確認日時', '現地確認担当', '受入日時', '受入担当', '風乾日時', '風乾担当', '被覆', '検測深度'];
+  const old = ['状態', '地点', '上下', 'コード', '採取日時', '採取担当', '受入日時', '受入担当', '風乾日時', '風乾担当', '被覆', '検測深度'];
+  const h = build({ '表層土壌': [head, ['', 'A1', '上', 'ABCD-S-0001', '2026/11/18 10:00', '佐藤', '', '', '', '', '', '', '', '']],
+                    '土壌ガス': [['状態', '地点', 'コード', '削孔日時', '削孔担当', '採取日時', '採取担当'], ['', 'G1', 'ABCD-G-0001', '', '', '', '']] });
+  const r = h.ctx.getSaishuAll('S1');
+  ok(r.kinds['表層土壌'].hasGenchi === true, '現地確認日時の列があれば true(' + JSON.stringify(r.kinds['表層土壌']) + ')');
+  ok(r.kinds['土壌ガス'].hasGenchi === false, '無ければ false(' + JSON.stringify(r.kinds['土壌ガス']) + ')');
+  ok(r.kinds['表層土壌'].rows.length === 1 && r.kinds['表層土壌'].rows[0][9] === 'ABCD-S-0001', '行はそのまま');
+  const h2 = build({ '表層土壌': [old, ['', 'A1', '上', 'ABCD-S-0001', '', '', '', '', '', '', '', '']] });
+  ok(h2.ctx.getSaishuAll('S1').kinds['表層土壌'].hasGenchi === false, '古い並びのシートは false');
+});
+
 for (const [name, fn] of tests) {
   try { fn(); } catch (e) { ok(false, name + ' が例外: ' + (e && e.stack || e)); }
 }

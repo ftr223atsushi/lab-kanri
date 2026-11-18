@@ -1131,6 +1131,7 @@ function handlePhase1V2(ss, kind, mode, cfg, parsed, worker, force, isDeleted, r
     kind: kind,
     mode: mode, modeLabel: modeLabel, autoMode: null,
     point: point, ud: ud, depth: depthOut, worker: worker,
+    code: parsed.baseCode,   // v3.40: アプリが現地確認の「残り」から消すのに使う
     isDeleted: isDeleted,
     needExtra: needExtra,
     extraInfo: extraInfo,
@@ -2317,7 +2318,8 @@ function readKindWorkRows_(ss, kind, labMap) {
       w.SUIJI ? get(w.SUIJI) : ''
     ]);
   }
-  return { name: sheet.getName(), rows: rows };
+  // v3.40: 現地確認日時の列があるか（無い古いシートは、現地確認の「残り」を数えない）
+  return { name: sheet.getName(), rows: rows, hasGenchi: !!w.GENCHI_T };
 }
 
 // ========== ユーティリティ ==========
