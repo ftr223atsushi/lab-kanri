@@ -2223,22 +2223,32 @@ const PICKER_GRID_MARK_ = '__PICKER_V1__';
 const PICKER_GRID_CACHE_SEC_ = 21600;
 const PICKER_GRID_CACHE_MAX_ = 100 * 1024;
 function readPickerGrid_(ss) {
-  let sheet;
-  try { sheet = ss.getSheetByName(PICKER_GRID_TAB_); } catch (e) { return { error: '対応表のタブを開けません' }; }
-  if (!sheet) return null;
-  let head;
-  try { head = sheet.getRange(1, 1, 2, 1).getValues(); } catch (e) { return { error: '対応表を読めません' }; }
-  if (String(head[0][0] || '').trim() !== PICKER_GRID_MARK_) return null;
+  // 中で何が起きても答え全体（getSaishuAll など）を壊さない
+  try { return readPickerGridInner_(ss); }
+  catch (e) { Logger.log('対応表を読めない: ' + e); return { error: '対応表を読めません（' + (e && e.message ? e.message : e) + '）' }; }
+}
+function readPickerGridInner_(ss) {
+  let cache = null, ckey = '', cached = null;
+  try {
+    cache = CacheService.getScriptCache();
+    ckey = 'lk_grid_' + ss.getId();
+    const hit = cache.get(ckey);
+    if (hit) cached = JSON.parse(hit);
+  } catch (e) { cache = null; cached = null; }
+  // さっきまで表のあった本が今は読めない（picker が消してから書き直す途中など）ときは、null（表の無い現場）ではなく {error}。
+  // null だとアプリが表なしの読み方で名前の地点を英字＋数字の区画と読み違えるおそれがあるため
+  const missing = function() {
+    return (cached && cached.grid && cached.grid.pointNames) ? { error: '対応表を読めません（picker が書き直している途中かもしれません）' } : null;
+  };
+  const sheet = ss.getSheetByName(PICKER_GRID_TAB_);
+  if (!sheet) return missing();
+  const head = sheet.getRange(1, 1, 2, 1).getValues();
+  if (String(head[0][0] || '').trim() !== PICKER_GRID_MARK_) return missing();
   let meta;
   try { meta = JSON.parse(String(head[1][0] || '')); } catch (e) { return { error: '対応表の meta が読めません' }; }
   const chunks = Number(meta && meta.chunks), length = Number(meta && meta.length), savedAt = String((meta && meta.savedAt) || '');
   if (!(chunks >= 1) || !(length >= 0)) return { error: '対応表の meta が読めません' };
-  const cache = CacheService.getScriptCache();
-  const ckey = 'lk_grid_' + ss.getId();
-  try {
-    const hit = cache.get(ckey);
-    if (hit) { const c = JSON.parse(hit); if (c && c.savedAt === savedAt && savedAt) return c.grid; }
-  } catch (e) { /* 控えが読めなければ読み直す */ }
+  if (cached && savedAt && cached.savedAt === savedAt) return cached.grid;
   let grid;
   try {
     if (sheet.getLastRow() < 2 + chunks) throw new Error('chunks が足りません');
@@ -2260,7 +2270,7 @@ function readPickerGrid_(ss) {
     const v = JSON.stringify({ savedAt: savedAt, grid: grid });
     // UTF-8 のバイト数（%XX を1バイトに数える）
     const bytes = encodeURIComponent(v).replace(/%[0-9A-F]{2}/g, 'x').length;
-    if (savedAt && bytes <= PICKER_GRID_CACHE_MAX_) cache.put(ckey, v, PICKER_GRID_CACHE_SEC_);
+    if (cache && savedAt && bytes <= PICKER_GRID_CACHE_MAX_) cache.put(ckey, v, PICKER_GRID_CACHE_SEC_);
   } catch (e) { Logger.log('対応表の控えを置けず: ' + e); }
   return grid;
 }

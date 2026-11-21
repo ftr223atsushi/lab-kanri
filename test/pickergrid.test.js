@@ -93,6 +93,28 @@ test('answers_carry_pickerGrid', () => {
   ok(h2.ctx.getSaishuAll('S1').pickerGrid === null && h2.ctx.getKentaiData('S1').pickerGrid === null && h2.ctx.getDailyReportData('S1', '').pickerGrid === null, '表の無い本は null');
 });
 
+test('grid_table_then_unreadable_is_error', () => {
+  const h = build({ '_picker_data': pdTab({ site: { grid: GRID } }) });
+  ok(h.ctx.readPickerGrid_(book(h)).pointNames, '1回目は表');
+  const sh = book(h).getSheetByName('_picker_data');
+  sh.rows = [[''], ['']];   // picker が消してから書き直す途中
+  const g = h.ctx.readPickerGrid_(book(h));
+  ok(g && g.error, 'さっきまで表があったのに読めない＝{error}（null にしない）(' + JSON.stringify(g) + ')');
+  book(h).sheets = book(h).sheets.filter(x => x.name !== '_picker_data');
+  const g2 = h.ctx.readPickerGrid_(book(h));
+  ok(g2 && g2.error, 'タブが消えても、表を覚えている間は {error}(' + JSON.stringify(g2) + ')');
+  const h2 = build({ '_picker_data': pdTab({ site: { grid: { xSpec: 'A' } } }) });
+  ok(h2.ctx.readPickerGrid_(book(h2)) === null, '表を覚えていなければ null のまま');
+});
+test('grid_exception_does_not_break_answers', () => {
+  const h = build({ '_picker_data': pdTab({ site: { grid: GRID } }), '分析検体': [['地点', '1', '2']] });
+  h.ctx.CacheService.getScriptCache = () => { throw new Error('cache down'); };
+  const g = h.ctx.readPickerGrid_(book(h));
+  ok(g && (g.error || g.pointNames), '控えが壊れていても例外にしない(' + JSON.stringify(g) + ')');
+  const a = h.ctx.getSaishuAll('S1');
+  ok(a.ok === true, 'getSaishuAll は ok のまま(' + JSON.stringify(a).slice(0, 150) + ')');
+});
+
 for (const [name, fn] of tests) {
   try { fn(); } catch (e) { ok(false, name + ' が例外: ' + (e && e.stack || e)); }
 }
