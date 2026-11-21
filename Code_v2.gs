@@ -2034,6 +2034,7 @@ function getDailyReportData(spreadsheetId, date) {
     const dateKeys = sorted.map(function(x) { return x.dateKey; });
     const kenmei = getKenmeiMap_(ss);
     return { ok: true, today: today, header: DAILY_REPORT_HEADER.slice(),
+             pickerGrid: readPickerGrid_(ss),   // v3.41: 本日の地点の順に使う
              rows: rows, kinds: kinds, dateKeys: dateKeys, dates: dates, kenmei: kenmei };
   } catch (e) {
     return { ok: false, message: 'エラー: ' + e.message };
@@ -2165,7 +2166,9 @@ function getKentaiData(spreadsheetId) {
     }
 
     // アプリ用は 0 始まりに直して渡す
-    return { ok: true, name: '分析検体', header: header, rows: rows, hints: hints, codes: codes, voc: voc, cols: {
+    return { ok: true, name: '分析検体', header: header, rows: rows, hints: hints, codes: codes, voc: voc,
+             pickerGrid: readPickerGrid_(ss),   // v3.41: 名前の見出しの対応表
+             cols: {
       kuga: cols.kuga - 1, kuro: cols.kuro - 1, aka: cols.aka - 1, ao: cols.ao - 1,
       soroi: cols.soroi - 1, huri: cols.huri - 1, roka: cols.roka - 1
     } };
@@ -2202,10 +2205,64 @@ function getSaishuAll(spreadsheetId) {
     });
     // v3.40: 深度の穴の「実際に掘った深さ」(掘削完了タブの検測)。現地確認の「残り」で、浅く止めた穴の
     //        予定より深い袋を数えないために使う。古いアプリは知らない項目を無視する
-    return { ok: true, kinds: result, depthDone: readDepthDone_(ss) };
+    return { ok: true, kinds: result, depthDone: readDepthDone_(ss), pickerGrid: readPickerGrid_(ss) };
   } catch (e) {
     return { ok: false, message: 'エラー: ' + e.message };
   }
+}
+
+/**
+ * v3.41: picker の名前の見出し（北1・Aa・南-1 など）の対応表。_picker_data タブ（A1＝印・A2＝meta・A3〜＝JSON を分けた文字列）の
+ * site.grid から pointNames・axisOrder・rowNames・colNames だけを取り出す。
+ * 返す値：null＝表の無い現場（タブ無し・印違い・pointNames 無し）／{pointNames, axisOrder, rowNames, colNames}／{error}＝読めない。
+ * _picker_data は図面入りだと数MBあるので、毎回は A2 の savedAt だけ読み、控え（6時間）と同じなら控えを返す。
+ * 控えが 100KB を超えるときは控えない（毎回読む）。
+ */
+const PICKER_GRID_TAB_ = '_picker_data';
+const PICKER_GRID_MARK_ = '__PICKER_V1__';
+const PICKER_GRID_CACHE_SEC_ = 21600;
+const PICKER_GRID_CACHE_MAX_ = 100 * 1024;
+function readPickerGrid_(ss) {
+  let sheet;
+  try { sheet = ss.getSheetByName(PICKER_GRID_TAB_); } catch (e) { return { error: '対応表のタブを開けません' }; }
+  if (!sheet) return null;
+  let head;
+  try { head = sheet.getRange(1, 1, 2, 1).getValues(); } catch (e) { return { error: '対応表を読めません' }; }
+  if (String(head[0][0] || '').trim() !== PICKER_GRID_MARK_) return null;
+  let meta;
+  try { meta = JSON.parse(String(head[1][0] || '')); } catch (e) { return { error: '対応表の meta が読めません' }; }
+  const chunks = Number(meta && meta.chunks), length = Number(meta && meta.length), savedAt = String((meta && meta.savedAt) || '');
+  if (!(chunks >= 1) || !(length >= 0)) return { error: '対応表の meta が読めません' };
+  const cache = CacheService.getScriptCache();
+  const ckey = 'lk_grid_' + ss.getId();
+  try {
+    const hit = cache.get(ckey);
+    if (hit) { const c = JSON.parse(hit); if (c && c.savedAt === savedAt && savedAt) return c.grid; }
+  } catch (e) { /* 控えが読めなければ読み直す */ }
+  let grid;
+  try {
+    if (sheet.getLastRow() < 2 + chunks) throw new Error('chunks が足りません');
+    const parts = sheet.getRange(3, 1, chunks, 1).getValues().map(function(r) { return String(r[0] == null ? '' : r[0]); });
+    const json = parts.join('');
+    if (json.length !== length) throw new Error('長さが合いません');
+    const data = JSON.parse(json);
+    const g = data && data.site && data.site.grid;
+    if (!g || !g.pointNames || typeof g.pointNames !== 'object') grid = null;
+    else grid = { pointNames: g.pointNames,
+                  axisOrder: (g.axisOrder && typeof g.axisOrder === 'object') ? g.axisOrder : { cols: [], rows: [] },
+                  rowNames: (g.rowNames && typeof g.rowNames === 'object') ? g.rowNames : {},
+                  colNames: (g.colNames && typeof g.colNames === 'object') ? g.colNames : {} };
+  } catch (e) {
+    Logger.log('対応表を読めない: ' + e);
+    return { error: '対応表を読めません（' + (e && e.message ? e.message : e) + '）' };   // 壊れた答えは控えない
+  }
+  try {
+    const v = JSON.stringify({ savedAt: savedAt, grid: grid });
+    // UTF-8 のバイト数（%XX を1バイトに数える）
+    const bytes = encodeURIComponent(v).replace(/%[0-9A-F]{2}/g, 'x').length;
+    if (savedAt && bytes <= PICKER_GRID_CACHE_MAX_) cache.put(ckey, v, PICKER_GRID_CACHE_SEC_);
+  } catch (e) { Logger.log('対応表の控えを置けず: ' + e); }
+  return grid;
 }
 
 /**
