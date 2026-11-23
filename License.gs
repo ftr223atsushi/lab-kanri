@@ -490,19 +490,51 @@ const LICENSE_TITLE_KEYS_ = [['soil', '件名(表層土壌)'], ['gas', '件名(�
 
 // 1つのシートの件名 {soil?, gas?, pipe?, depth?, survey?}（空は省く）。件名タブが無ければ {}。開けないときは例外のまま返す
 // （getKenmeiMap_ は失敗を飲み込むので使わない：一時の失敗で空の答えを6時間覚えてしまうため）
+// v3.43(サーバー)：データのタブの検体コードの頭の英字4文字を件名の頭に［FMFH］と付ける（似た件名の現場を見分ける）。
+//   2種類あれば［FMFH・ABCD］（見つけた順）。件名タブが無くてもコードがあれば soil に［FMFH］だけ。コードが無ければ今までどおり
 function license_readSiteTitle_(id) {
-  const sheet = SpreadsheetApp.openById(id).getSheetByName(SHEET_KENMEI);
+  const ss = SpreadsheetApp.openById(id);
+  const sheet = ss.getSheetByName(SHEET_KENMEI);
   const t = {};
-  if (!sheet) return t;
-  const lastRow = Math.min(sheet.getLastRow(), 20);
-  if (lastRow < 1) return t;
-  const map = {};
-  sheet.getRange(1, 1, lastRow, 2).getDisplayValues().forEach(function (r) {
-    const k = String(r[0] || '').trim();
-    if (k) map[k] = String(r[1] || '').trim();
-  });
-  LICENSE_TITLE_KEYS_.forEach(function (kv) { if (map[kv[1]]) t[kv[0]] = map[kv[1]]; });
+  if (sheet) {
+    const lastRow = Math.min(sheet.getLastRow(), 20);
+    if (lastRow >= 1) {
+      const map = {};
+      sheet.getRange(1, 1, lastRow, 2).getDisplayValues().forEach(function (r) {
+        const k = String(r[0] || '').trim();
+        if (k) map[k] = String(r[1] || '').trim();
+      });
+      LICENSE_TITLE_KEYS_.forEach(function (kv) { if (map[kv[1]]) t[kv[0]] = map[kv[1]]; });
+    }
+  }
+  const codes = license_siteCodePrefixes_(ss);
+  if (!codes.length) return t;
+  const head = '［' + codes.join('・') + '］';
+  const keys = Object.keys(t);
+  if (!keys.length) return { soil: head };
+  keys.forEach(function (k) { t[k] = head + ' ' + t[k]; });
   return t;
+}
+
+// データのタブ（1行目の「コード」の列）から、検体コードの頭の英字4文字を見つけた順に（重ならないように）返す
+const LICENSE_CODE_TABS_ = ['表層土壌', '土壌ガス', '配管・ピット・盛り土下', '深度調査'];
+const LICENSE_CODE_SCAN_ROWS_ = 300;
+function license_siteCodePrefixes_(ss) {
+  const found = [];
+  LICENSE_CODE_TABS_.forEach(function (name) {
+    const sh = ss.getSheetByName(name);
+    if (!sh) return;
+    const lastRow = Math.min(sh.getLastRow(), LICENSE_CODE_SCAN_ROWS_ + 1), lastCol = sh.getLastColumn();
+    if (lastRow < 2 || lastCol < 1) return;
+    const header = sh.getRange(1, 1, 1, lastCol).getDisplayValues()[0].map(function (v) { return String(v || '').trim(); });
+    const col = header.indexOf('コード') + 1;
+    if (col < 1) return;
+    sh.getRange(2, col, lastRow - 1, 1).getDisplayValues().forEach(function (r) {
+      const m = String(r[0] || '').trim().toUpperCase().match(/^([A-Z]{4})-(?:WG|WP|[SGHDL])-\d{4}/);
+      if (m && found.indexOf(m[1]) < 0) found.push(m[1]);
+    });
+  });
+  return found;
 }
 
 // sites=[{id}]（license_listSites_ の答え）→ {titles: {id: {...}}, partial: 時間切れで読み残しがあれば true}
@@ -510,7 +542,7 @@ function license_readSiteTitle_(id) {
 function license_siteTitles_(sites) {
   const cache = CacheService.getScriptCache();
   const list = (sites || []).filter(function (s) { return s && s.id; });
-  const keyOf = function (id) { return 'lk_title_' + id; };
+  const keyOf = function (id) { return 'lk_title2_' + id; };   // v3.43: 4文字を足したので前の版の控えは使わない
   let hits = {};
   try { hits = cache.getAll(list.map(function (s) { return keyOf(s.id); })) || {}; }
   catch (e) { Logger.log('件名の控えを読めず: ' + e); }

@@ -1626,6 +1626,40 @@ test('titles_read_kenmei_tab_and_cache', () => {
   h.ctx.license_siteTitles_([{ id: 'S1' }]);
   ok(h.calls.openById === opened + 1, '6時間たったら読み直す');
 });
+// ---- v3.43(サーバー)：件名の頭に検体コードの英字4文字（似た件名の現場を見分ける）----
+const DATA_TAB = (codes) => [['状態', '地点', '上下', 'コード', '採取日時']].concat(codes.map((c, i) => ['', 'A' + i, '上', c, '']));
+test('titles_code_prefix_one', () => {
+  const h = harness.build({});
+  addBook(h, 'S1', { '件名': KENMEI_ROWS({ soil: '〇〇市 調査', depth: '〇〇市 詳細調査' }),
+                     '表層土壌': DATA_TAB(['FMFH-S-0001', 'FMFH-S-0002', '']), '土壌ガス': DATA_TAB(['FMFH-G-0001']),
+                     '深度調査': DATA_TAB(['fmfh-d-0001', 'FMFH-WG-0001']) });
+  const r = h.ctx.license_siteTitles_([{ id: 'S1' }]);
+  ok(JSON.stringify(r.titles.S1) === JSON.stringify({ soil: '［FMFH］ 〇〇市 調査', depth: '［FMFH］ 〇〇市 詳細調査' }), '1種類なら各件名の頭に［FMFH］(' + JSON.stringify(r.titles.S1) + ')');
+});
+test('titles_code_prefix_two_kinds_in_found_order', () => {
+  const h = harness.build({});
+  addBook(h, 'S1', { '件名': KENMEI_ROWS({ soil: 'X' }), '表層土壌': DATA_TAB(['FMFH-S-0001']),
+                     '配管・ピット・盛り土下': DATA_TAB(['ABCD-H-0001', 'FMFH-H-0002']) });
+  const r = h.ctx.license_siteTitles_([{ id: 'S1' }]);
+  ok(r.titles.S1.soil === '［FMFH・ABCD］ X', '2種類は見つけた順に並べる(' + JSON.stringify(r.titles.S1) + ')');
+});
+test('titles_code_prefix_none_or_no_kenmei', () => {
+  const h = harness.build({});
+  addBook(h, 'S1', { '件名': KENMEI_ROWS({ soil: 'X' }), '表層土壌': DATA_TAB(['', 'メモ', 'AB-S-1']) });
+  addBook(h, 'S2', { '表層土壌': DATA_TAB(['QRST-S-0001']) });   // 件名タブが無い
+  addBook(h, 'S3', { '表層土壌': [['状態', '地点', '上下', 'メモ'], ['', 'A1', '上', 'ZZZZ-S-0001']] });   // コードの列が無い
+  const r = h.ctx.license_siteTitles_([{ id: 'S1' }, { id: 'S2' }, { id: 'S3' }]);
+  ok(r.titles.S1.soil === 'X', 'コードが無ければ件名だけ(' + JSON.stringify(r.titles.S1) + ')');
+  ok(JSON.stringify(r.titles.S2) === JSON.stringify({ soil: '［QRST］' }), '件名タブが無くてもコードがあれば［QRST］だけ(' + JSON.stringify(r.titles.S2) + ')');
+  ok(JSON.stringify(r.titles.S3) === '{}', '「コード」の見出しの無い列は読まない(' + JSON.stringify(r.titles.S3) + ')');
+});
+test('titles_old_cache_ignored_after_upgrade', () => {
+  const h = harness.build({});
+  addBook(h, 'S1', { '件名': KENMEI_ROWS({ soil: 'X' }), '表層土壌': DATA_TAB(['FMFH-S-0001']) });
+  h.ctx.CacheService.getScriptCache().put('lk_title_S1', JSON.stringify({ soil: 'X' }), 21600);   // 前の版が覚えた答え
+  const r = h.ctx.license_siteTitles_([{ id: 'S1' }]);
+  ok(r.titles.S1.soil === '［FMFH］ X', '前の版の控えは使わず読み直す(' + JSON.stringify(r.titles.S1) + ')');
+});
 test('titles_open_failure_skipped_retry_after_10min', () => {
   const h = harness.build({});
   addBook(h, 'S1', { '件名': KENMEI_ROWS({ soil: 'A' }) });
