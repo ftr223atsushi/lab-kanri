@@ -115,6 +115,15 @@ test('grid_exception_does_not_break_answers', () => {
   ok(a.ok === true, 'getSaishuAll は ok のまま(' + JSON.stringify(a).slice(0, 150) + ')');
 });
 
+test('grid_block_mode_passes_pointNames', () => {
+  // v3.42: picker v3.96 のブロック方式（freeMode・blocks・axisOrder なし）でも pointNames を渡し、axisOrder は空にする
+  const pn = { A1: '南A1', B1: '南B1', A3: '北A1', A4: '東' };
+  const h = build({ '_picker_data': pdTab({ site: { grid: { freeMode: true, blocks: [{ name: '南' }], pointNames: pn } } }) });
+  const g = h.ctx.readPickerGrid_(book(h));
+  ok(g && JSON.stringify(g.pointNames) === JSON.stringify(pn), 'ブロック方式の pointNames(' + JSON.stringify(g) + ')');
+  ok(g && JSON.stringify(g.axisOrder) === JSON.stringify({ cols: [], rows: [] }), 'axisOrder は空');
+  ok(g && Object.keys(g).sort().join() === 'axisOrder,colNames,pointNames,rowNames', 'freeMode・blocks は渡さない');
+});
 for (const [name, fn] of tests) {
   try { fn(); } catch (e) { ok(false, name + ' が例外: ' + (e && e.stack || e)); }
 }
